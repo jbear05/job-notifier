@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Alex",
+    "contact": "jairg2005@gmail.com",
+    "skills": ["Python", "React", "backend", "REST APIs"],
+    "interests": ["fintech", "developer tools", "SaaS"],
+    "level": "internship",
+    "notify": true
+  }
+]

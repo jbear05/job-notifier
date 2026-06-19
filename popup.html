@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Notifier</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+  <!-- Loading state -->
+  <div id="loading">
+    <div class="spinner"></div>
+    <p class="loading-text">Analyzing job posting…</p>
+  </div>
+
+  <!-- Results state -->
+  <div id="results" hidden>
+    <div id="job-card" class="job-card"></div>
+
+    <div id="match-list"></div>
+
+    <div id="empty-state" class="empty-state" hidden>
+      No strong matches for this job.
+    </div>
+
+    <button id="send-all-btn" class="send-all-btn" hidden>Send to all checked</button>
+  </div>
+
+  <!-- Error state -->
+  <div id="error-state" hidden>
+    <div class="error-icon">⚠</div>
+    <p id="error-message" class="error-message"></p>
+  </div>
+
+  <!-- Manual fallback state -->
+  <div id="manual-fallback" hidden>
+    <p id="fallback-message" class="fallback-message"></p>
+    <textarea
+      id="manual-input"
+      class="manual-input"
+      rows="8"
+      placeholder="Paste the job posting text here…"
+    ></textarea>
+    <p id="manual-error" class="manual-error"></p>
+    <button id="manual-analyze-btn" class="analyze-btn">Analyze</button>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
