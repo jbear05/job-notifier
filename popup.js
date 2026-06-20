@@ -5,6 +5,15 @@ let currentJob = null;
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  // Load and wire toggle
+  const toggle = document.getElementById("auto-toggle");
+  chrome.storage.local.get("autoDetect", data => {
+    toggle.checked = data.autoDetect !== false;
+  });
+  toggle.addEventListener("change", () => {
+    chrome.storage.local.set({ autoDetect: toggle.checked });
+  });
+
   showState("loading");
 
   // Load friends list
