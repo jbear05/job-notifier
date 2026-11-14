@@ -8,34 +8,19 @@ When you submit a job application, a popup appears with a list of matched friend
 
 ## Features
 
-- Auto-detects job application confirmation pages across major job boards
-- Matches friends by skills, interests, and experience level using Claude AI
+- Auto-detects job application confirmation pages across major job boards, including when the confirmation is on a different site than the posting
+- Matches friends by skills, interests, and experience level using Claude
 - Drafts a personalized message for each match explaining why the role fits them
-- Send or copy messages per friend, or send to all at once
+- Send or copy messages per friend, step through all checked emails, or copy them all at once
 - Toggle auto-detection on/off from the extension popup
 - Manual mode: paste any job posting text to run the analysis yourself
 
 ## Setup
 
-**1. Get an Anthropic API key**
+1. Go to `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and select this folder. Nothing needs to be built or generated first.
+2. The settings page opens automatically. Paste an Anthropic API key (create one at [console.anthropic.com](https://console.anthropic.com/settings/keys)), add your friends, and click **Save**. You can reopen settings from the gear icon in the popup.
 
-Create an account at [console.anthropic.com](https://console.anthropic.com), go to **API Keys**, and generate a key. You'll need to add billing credits — each analysis costs a fraction of a cent.
-
-**2. Configure the extension**
-
-Create `config.js` in the project folder (it's gitignored to protect your key):
-
-```js
-const CONFIG = {
-  ANTHROPIC_API_KEY: "sk-ant-...",
-  MODEL: "claude-sonnet-4-6",
-  RELEVANCE_THRESHOLD: 0.6
-};
-```
-
-**3. Add your friends**
-
-Edit `friends.json` with the people you want to notify:
+Friends are a JSON list:
 
 ```json
 [
@@ -52,24 +37,25 @@ Edit `friends.json` with the people you want to notify:
 
 Set `"notify": false` to temporarily exclude someone without deleting them.
 
-**4. Generate icons**
-
-Open `icons/generate-icons.html` in your browser, download the three icons, and save them as `icons/icon16.png`, `icons/icon48.png`, and `icons/icon128.png`.
-
-**5. Load into Chrome**
-
-1. Go to `chrome://extensions`
-2. Enable **Developer mode** (top right)
-3. Click **Load unpacked** and select this folder
+Your key and friends list are stored only in Chrome's extension storage on your machine. Only names, skills, interests, and level are sent to Claude; contact details never leave the browser.
 
 ## Usage
 
-**Auto mode (default):** Browse to a job posting, apply normally, and the overlay appears automatically on the confirmation page.
+**Auto mode (default):** Browse to a job posting, apply normally, and the overlay appears on the confirmation page. Each posting is analyzed at most once.
 
-**Manual mode:** Click the extension icon on any page. If a job posting isn't detected, paste the text into the text area and click Analyze.
+**Manual mode:** Click the extension icon. If the page is a job posting, its text is pre-filled; otherwise paste the text. Click **Find matching friends**. Opening the popup by itself never calls Claude.
 
-**Toggle:** Click the extension icon at any time to turn auto-detection on or off using the toggle in the header.
+**Toggle:** Use the switch in the popup header to turn auto-detection on or off.
+
+## Development
+
+```sh
+npm test        # unit tests for detection, prompt building, and response parsing
+npm run check   # syntax check every script
+```
+
+The same checks run on GitHub for every push and pull request.
 
 ## Supported job boards
 
-Auto-detection works on any site that shows a text confirmation after applying — including LinkedIn, Greenhouse, Lever, Workday, Indeed, and most ATS platforms. If a site isn't detected, use manual mode.
+Auto-detection works on any site that shows a text confirmation after applying — including LinkedIn, Greenhouse, Lever, Workday, Indeed, and most ATS platforms. If a site isn't detected, use manual mode. Confirmations shown inside an embedded iframe aren't detected yet.

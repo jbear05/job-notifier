@@ -11,19 +11,35 @@
   <!-- Persistent header -->
   <div class="popup-header">
     <span class="popup-brand">Job Notifier</span>
-    <label class="toggle-wrap" title="Auto-detect job applications">
-      <span class="toggle-label">Auto-detect</span>
-      <span class="toggle">
-        <input type="checkbox" id="auto-toggle">
-        <span class="toggle-slider"></span>
-      </span>
-    </label>
+    <div class="header-right">
+      <label class="toggle-wrap" title="Auto-detect job applications">
+        <span class="toggle-label">Auto-detect</span>
+        <span class="toggle">
+          <input type="checkbox" id="auto-toggle">
+          <span class="toggle-slider"></span>
+        </span>
+      </label>
+      <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+    </div>
   </div>
 
   <!-- Loading state -->
   <div id="loading">
     <div class="spinner"></div>
     <p class="loading-text">Analyzing job posting…</p>
+  </div>
+
+  <!-- Input state: detected posting (pre-filled) or paste your own -->
+  <div id="manual-fallback" hidden>
+    <p id="fallback-message" class="fallback-message"></p>
+    <textarea
+      id="manual-input"
+      class="manual-input"
+      rows="8"
+      placeholder="Paste the job posting text here…"
+    ></textarea>
+    <p id="manual-error" class="manual-error"></p>
+    <button id="manual-analyze-btn" class="analyze-btn">Find matching friends</button>
   </div>
 
   <!-- Results state -->
@@ -36,29 +52,21 @@
       No strong matches for this job.
     </div>
 
-    <button id="send-all-btn" class="send-all-btn" hidden>Send to all checked</button>
+    <div id="bulk-actions" class="bulk-actions" hidden>
+      <button id="send-all-btn" class="send-all-btn">Open next email</button>
+      <button id="copy-all-btn" class="copy-btn">Copy all</button>
+    </div>
+    <p id="bulk-hint" class="bulk-hint" hidden>Browsers only allow one email window per click, so this opens the checked emails one at a time.</p>
   </div>
 
   <!-- Error state -->
   <div id="error-state" hidden>
     <div class="error-icon">⚠</div>
     <p id="error-message" class="error-message"></p>
+    <button id="error-settings-btn" class="analyze-btn" hidden>Open settings</button>
   </div>
 
-  <!-- Manual fallback state -->
-  <div id="manual-fallback" hidden>
-    <p id="fallback-message" class="fallback-message"></p>
-    <textarea
-      id="manual-input"
-      class="manual-input"
-      rows="8"
-      placeholder="Paste the job posting text here…"
-    ></textarea>
-    <p id="manual-error" class="manual-error"></p>
-    <button id="manual-analyze-btn" class="analyze-btn">Analyze</button>
-  </div>
-
-  <script src="config.js"></script>
+  <script src="lib/core.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

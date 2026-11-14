@@ -1,0 +1,10 @@
+{
+  "name": "job-notifier",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Chrome extension that drafts job referral messages for friends.",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "for f in background.js content.js popup.js options.js lib/core.js; do node --check $f || exit 1; done"
+  }
+}

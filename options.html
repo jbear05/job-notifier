@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Job Notifier settings</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <main>
+    <h1>Job Notifier settings</h1>
+    <p class="lede">Everything here is stored only in this browser. Your API key and friends' contact details are never shared with job sites; only names, skills, interests, and level are sent to Claude.</p>
+
+    <section>
+      <h2>Claude</h2>
+      <label for="api-key">Anthropic API key</label>
+      <input id="api-key" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
+      <p class="help">Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+
+      <div class="row">
+        <div>
+          <label for="model">Model</label>
+          <input id="model" type="text" spellcheck="false" />
+        </div>
+        <div>
+          <label for="effort">Effort</label>
+          <select id="effort">
+            <option value="low">Low (cheapest)</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+        <div>
+          <label for="threshold">Match threshold</label>
+          <input id="threshold" type="number" min="0" max="1" step="0.05" />
+        </div>
+      </div>
+
+      <label class="check"><input id="auto-detect" type="checkbox" /> Automatically suggest friends after I apply to a job</label>
+    </section>
+
+    <section>
+      <h2>Friends</h2>
+      <p class="help">A JSON list. Each friend needs a <code>name</code>; <code>contact</code>, <code>skills</code>, <code>interests</code>, <code>level</code> are optional. Set <code>"notify": false</code> to skip someone.</p>
+      <textarea id="friends" rows="16" spellcheck="false"></textarea>
+    </section>
+
+    <div class="actions">
+      <button id="save">Save</button>
+      <span id="status" role="status"></span>
+    </div>
+  </main>
+  <script src="lib/core.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

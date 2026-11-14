@@ -2,196 +2,115 @@
 
 ## Architecture
 
-The extension is built on Chrome Manifest V3 and has three main contexts:
+The extension is built on Chrome Manifest V3 and has four contexts:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Job site page                                      │
-│  ┌─────────────────────────────────────────────┐   │
-│  │ content.js + config.js (content scripts)    │   │
-│  │  - Detects job postings & confirmations     │   │
-│  │  - Captures job text                        │   │
-│  │  - Injects and manages the overlay UI       │   │
-│  └──────────────┬──────────────────────────────┘   │
-└─────────────────┼───────────────────────────────────┘
-                  │ chrome.runtime.connect (port)
-┌─────────────────▼───────────────────────────────────┐
-│  background.js (service worker)                     │
-│  - Loads friends.json                               │
-│  - Calls Anthropic API                              │
-│  - Returns scored matches with contact info         │
-└─────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────┐
-│  popup.html / popup.js / popup.css (extension popup)│
-│  - Manual job analysis                              │
-│  - Auto-detect toggle (saved to chrome.storage)     │
-│  - Results UI with send/copy per friend             │
-└─────────────────────────────────────────────────────┘
+│  Any web page                                        │
+│  ┌──────────────────────────────────────────────┐   │
+│  │ lib/core.js + content.js (content scripts)   │   │
+│  │  - Reads visible text locally                │   │
+│  │  - Reports job postings to the background    │   │
+│  │  - Spots confirmation messages               │   │
+│  │  - Renders the overlay UI                    │   │
+│  └──────────────┬───────────────────────────────┘   │
+└─────────────────┼────────────────────────────────────┘
+                  │ JOB_SEEN message / "analyze" port
+┌─────────────────▼────────────────────────────────────┐
+│  background.js (service worker)                      │
+│  - Remembers recent postings per tab (storage.session)│
+│  - Dedupes: each posting analyzed at most once       │
+│  - Only place that calls the Anthropic API           │
+└──────────────────────────────────────────────────────┘
+┌──────────────────────────┐ ┌─────────────────────────┐
+│ popup.html / popup.js    │ │ options.html / options.js│
+│ - Manual analysis        │ │ - API key, model, effort │
+│ - Auto-detect toggle     │ │ - Match threshold        │
+│                          │ │ - Friends list editor    │
+└──────────────────────────┘ └─────────────────────────┘
 ```
 
-The API call is intentionally routed through the **background service worker** rather than the content script. This is necessary because some job sites set a Content Security Policy that blocks outbound `fetch` requests from content scripts, even to extension-permitted hosts. The service worker runs in the extension's own context and is not subject to page CSP.
+`lib/core.js` holds all the pure logic (detection patterns, prompt and request building, response parsing, mailto helpers). It defines a global `JN` in the extension and is `require()`d by the Node tests.
 
-A **persistent port connection** (`chrome.runtime.connect`) is used instead of one-shot `sendMessage` to prevent Chrome from terminating the service worker mid-request during the API call.
+The API call runs in the **background service worker** because some job sites set a Content Security Policy that blocks outbound `fetch` from content scripts. The popup also goes through the background so there is one code path. A **port connection** (`chrome.runtime.connect`) keeps the service worker alive for the whole request.
 
 ---
 
-## File reference
+## Storage
 
-### `manifest.json`
-Manifest V3 extension config.
+| Where | Key | Contents |
+|-------|-----|----------|
+| `chrome.storage.local` | `settings` | `{ apiKey, model, effort, threshold }` |
+| `chrome.storage.local` | `autoDetect` | boolean, default `true` |
+| `chrome.storage.local` | `friends` | the friends list; until saved, `friends.json` (an example) is used |
+| `chrome.storage.session` | `jobs`, `lastJob` | recently viewed postings, per tab id; memory only, cleared when the browser closes |
+| `chrome.storage.session` | `analyzed` | hashes of the last 100 postings already analyzed |
 
-Key permissions:
-- `activeTab` — read the current tab's URL and inject scripts on demand
-- `scripting` — execute content scripts programmatically
-- `storage` — persist the auto-detect toggle state via `chrome.storage.local`
-- `clipboardWrite` — copy messages to clipboard
-- `host_permissions: https://api.anthropic.com/*` — allow the background service worker to call the Anthropic API
+Web pages cannot read any of these. Nothing is written to the site's own `localStorage`/`sessionStorage`.
 
-### `config.js` *(gitignored — create locally)*
-Holds runtime secrets and tuning values. Never committed.
-
-```js
-const CONFIG = {
-  ANTHROPIC_API_KEY: "sk-ant-...",  // Your Anthropic API key
-  MODEL: "claude-sonnet-4-6",        // Claude model to use
-  RELEVANCE_THRESHOLD: 0.6           // Minimum score (0–1) to include a match
-};
-```
-
-Loaded by both `popup.html` (via `<script src="config.js">`) and `content.js` (via content scripts in the manifest). The background service worker receives the config object in the message payload from the content script, so it never needs to load `config.js` directly.
-
-### `friends.json`
-The list of people to match against job postings.
-
-**Schema:**
+### Friends schema
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Display name, used in messages and as avatar initial |
-| `contact` | string | Email address used for `mailto:` links |
+| `name` | string | Required. Display name |
+| `contact` | string | Email used for `mailto:` links. Never sent to Claude |
 | `skills` | string[] | Technical skills to match against job requirements |
 | `interests` | string[] | Industry/domain interests |
-| `level` | string | Experience level: `"internship"`, `"new grad"`, `"mid"`, `"senior"` |
-| `notify` | boolean | Set to `false` to exclude from all analysis without deleting |
-
-### `content.js`
-Injected into every page. Handles two responsibilities:
-
-**1. Detection**
-
-On page load and on every DOM mutation (debounced to 600ms), `checkPage()` runs:
-- Extracts visible text from the page (strips `script`, `style`, `nav`, `footer`, `header` tags, truncates to 8000 chars)
-- If the text matches job posting signals (≥2 of 6 keyword patterns), stores it in a module-level variable and in `sessionStorage` under `__jn_jobText`
-- If the text matches any confirmation pattern (e.g. "application submitted", "thanks for applying"), triggers analysis — but only if `chrome.storage.local.autoDetect !== false`
-
-URL changes in SPAs are detected inside the same MutationObserver by comparing `location.href` to a stored `lastUrl`. On change, `overlayShown` and `capturedJobText` are reset.
-
-**2. Overlay UI**
-
-All overlay HTML and CSS is injected at runtime (`injectStyles()` inserts a `<style id="jn-styles">` tag). All CSS classes are prefixed with `jn-` to avoid collisions with host page styles.
-
-The overlay consists of a fixed backdrop (`#jn-overlay`) and a modal (`#jn-modal`) with:
-- A sticky white header with toggle-friendly subtitle
-- A scrollable `.jn-body` containing the job card, match cards, and send-all button
-- Per-match: avatar initial, editable textarea, Send (mailto) and Copy buttons
-- Clicking the backdrop or the × button dismisses the overlay
-
-**Also handles** the `GET_PAGE_TEXT` message from `popup.js` for the manual popup flow.
-
-### `background.js`
-Service worker. Activated by a port connection from `content.js`.
-
-Flow on `ANALYZE_JOB` message:
-1. Loads `friends.json` once (cached in module-level `friends` array)
-2. Filters to friends with `notify !== false`
-3. Sends a structured prompt to the Anthropic API with the job text and friends list
-4. Parses the JSON response (retries once with stricter instructions if parsing fails)
-5. Annotates each match with the friend's `contact` email (since content script can't fetch `friends.json` on CSP-restricted sites)
-6. Returns `{ ok: true, result }` or `{ ok: false, error }` via the port
-
-### `popup.html` / `popup.js` / `popup.css`
-The extension popup (opened by clicking the toolbar icon).
-
-States:
-- **Loading** — shown immediately on open while the page text is fetched and analyzed
-- **Results** — job card + matched friends with editable messages, Send and Copy buttons, Send All
-- **Error** — shown if the API call or tab access fails
-- **Manual fallback** — shown if the active page doesn't look like a job posting; user can paste text manually
-
-The popup calls the Anthropic API **directly** (not through the background), since the popup runs in the extension's own context and is never subject to a host page's CSP.
-
-The **auto-detect toggle** reads from and writes to `chrome.storage.local` key `autoDetect`. Default is `true` (treated as enabled when the key is absent).
+| `level` | string | e.g. `"internship"`, `"new grad"`, `"mid"`, `"senior"` |
+| `notify` | boolean | Set to `false` to exclude without deleting |
 
 ---
 
-## Detection patterns
-
-### Job posting signals (need ≥ 2 to match)
-- `job`, `position`, `role`, `opening`, `opportunity`
-- `responsibilities`, `qualifications`, `requirements`, `about the role`
-- `apply`, `application`, `candidates`
-- `salary`, `compensation`, `benefits`, `equity`
-- `full-time`, `part-time`, `contract`, `internship`, `remote`, `hybrid`, `on-site`
-- `experience`, `years`, `skills`, `proficiency`
-
-### Confirmation page triggers (any 1 matches)
-- `application submitted`
-- `application received`
-- `thanks for applying` / `thank you for applying`
-- `successfully applied`
-- `application is complete` / `application complete`
-- `your application has been`
-- `we received your application`
-- `you've now applied` / `you've applied`
-- `application was sent`
-
-To add support for a new site, add its confirmation phrase to the `CONFIRMATION_PATTERNS` array in `content.js`.
-
----
-
-## Claude prompt design
-
-The prompt asks Claude to do two things in one call:
-
-1. **Extract** structured job metadata: title, company, required skills, level, location, remote flag
-2. **Score and draft** — for each active friend, produce a relevance score (0.0–1.0) and a short personalized message if the score meets the threshold
-
-Returning both in a single JSON object keeps the API call to one round-trip. The prompt explicitly prohibits markdown, code fences, or any text outside the JSON to make parsing reliable. A retry path with stricter instructions handles the rare case where the model wraps the output anyway.
-
----
-
-## Data flow for auto-detection
+## Auto-detection flow
 
 ```
-1. User visits job posting
-   └─ content.js stores job text in capturedJobText + sessionStorage
+1. You view a job posting
+   └─ content.js reads the visible text of <main>/<article> (or <body>)
+   └─ If ≥3 job signals match, sends JOB_SEEN to the background
+   └─ background stores it under this tab's id (and as lastJob)
 
-2. User submits application → confirmation page loads
-   └─ MutationObserver fires → checkPage() detects confirmation text
-   └─ Checks chrome.storage.local.autoDetect → if enabled:
+2. You submit the application; a confirmation appears
+   └─ content.js checks *rendered* headings, dialogs, alerts, live regions,
+      and <main> (≤3000 chars each) for a confirmation phrase
+   └─ Opens the "analyze" port and sends AUTO_ANALYZE
 
-3. triggerAnalysis()
-   └─ showOverlayLoading() → injects overlay into page
-   └─ Opens port to background service worker
-   └─ Sends { type: 'ANALYZE_JOB', jobText, config }
+3. background.js
+   └─ Skips silently if auto-detect is off, no posting was seen in the last
+      30 minutes (this tab first, then any tab), or the posting was already analyzed
+   └─ Otherwise replies { started }, calls Claude, replies with the result
 
-4. background.js receives message
-   └─ Loads friends.json (cached after first load)
-   └─ Calls Anthropic API
-   └─ Annotates matches with contact emails
-   └─ port.postMessage({ ok: true, result })
-
-5. content.js receives result
-   └─ renderOverlayResults() → replaces loading state with job card + matches
-   └─ User reviews, edits, and clicks Send (opens mailto:) or Copy
+4. content.js shows the overlay only after { started }, then renders matches
 ```
+
+Because the posting is stored by tab id in the extension (not in the site's storage), it survives cross-site hops such as LinkedIn → Workday. Hidden elements are ignored, so pre-rendered "Thank you for applying" templates don't fire.
+
+### Detection patterns
+
+See `JOB_SIGNALS` and `CONFIRMATION_PATTERNS` in `lib/core.js`. Add a phrase there (and a case in `test/core.test.js`) to support a new site.
+
+---
+
+## Claude request
+
+`JN.buildRequest()` sends one request to `POST /v1/messages`:
+
+- **Model** from settings (default `claude-opus-5-5`) with `output_config.effort` (default `low`, to keep cost down).
+- **Structured output**: `output_config.format` with a JSON schema, so the response is always valid JSON.
+- **Refusal fallback**: on models that support it, `fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta header.
+- Friends are sent as `{ id, name, skills, interests, level }`. Claude returns matches by `id`, which are mapped back to the local list to attach contact emails.
+
+`JN.parseResponse()` handles `refusal` and `max_tokens` stop reasons, drops unknown or duplicate ids and below-threshold scores, and sorts by score.
+
+---
+
+## Sending
+
+`mailto:` links open your email client; you still press Send there. Browsers only allow one new window per click, so **Open next email** opens one checked email per click and counts down. **Copy all** copies every checked message as one block.
 
 ---
 
 ## Known limitations
 
-- **Confirmation text detection is heuristic.** Sites that show confirmation in a modal, iframe, or via a non-text method (e.g. an animation) may not trigger the overlay. Use manual mode as a fallback.
-- **Job text capture is per-tab and in-memory.** If you navigate to the job posting in one tab and the confirmation opens in a new tab, `capturedJobText` will be empty in the new tab. The extension falls back to `sessionStorage` (same origin only) and then to extracting text from the confirmation page itself.
-- **`mailto:` opens your default email client.** This is not a true send — you must click Send in Outlook, Gmail, Apple Mail, etc. True auto-send would require OAuth integration with your email provider (e.g. Microsoft Graph API for Outlook).
-- **Service worker lifecycle.** Chrome can terminate the background service worker at any time. The port connection keeps it alive during an API call, but if Chrome force-kills it, the overlay will show a "Connection closed unexpectedly" error. Reopening the popup and re-running manually works around this.
+- **Heuristic detection.** Confirmations shown inside cross-origin iframes, or only as images/animations, aren't detected. Use the popup.
+- **API key in the browser.** Calls go straight from the extension to Anthropic with your own key, which is fine for personal use. Publishing to the Chrome Web Store for other people would need a small backend so users don't need their own key.
+- **No true auto-send.** That would need OAuth with an email provider (Gmail API, Microsoft Graph).

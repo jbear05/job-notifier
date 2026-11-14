@@ -1,91 +1,105 @@
-let capturedJobText = null;
+// Content script: runs on every page, but only reads visible text locally.
+// Page text is sent to the extension only when it looks like a job posting,
+// and Claude is only called on a confirmation page that follows one.
+
 let overlayShown = false;
 let currentMatches = [];
 let currentJob = null;
 let checkTimer = null;
 let lastUrl = location.href;
+let lastReportedHash = null;
 
-const CONFIRMATION_PATTERNS = [
-  /application\s+submitted/i,
-  /application\s+received/i,
-  /thanks?\s+for\s+appl/i,
-  /thank\s+you\s+for\s+appl/i,
-  /successfully\s+applied/i,
-  /application\s+(is\s+)?complete/i,
-  /your\s+application\s+has\s+been/i,
-  /we\s+received\s+your\s+application/i,
-  /you'?ve?\s+(now\s+)?applied/i,
-  /application\s+was\s+sent/i,
-];
-
-const JOB_SIGNALS = [
-  /\b(job|position|role|opening|opportunity)\b/i,
-  /\b(responsibilities|qualifications|requirements|about the role)\b/i,
-  /\b(apply|application|candidates)\b/i,
-  /\b(salary|compensation|benefits|equity)\b/i,
-  /\b(full.?time|part.?time|contract|internship|remote|hybrid|on.?site)\b/i,
-  /\b(experience|years|skills|proficiency)\b/i,
-];
-
-function extractPageText() {
-  const clone = document.body.cloneNode(true);
-  clone.querySelectorAll('script, style, nav, footer, header').forEach(el => el.remove());
-  return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 8000);
+function isRendered(el) {
+  if (!el) return false;
+  if (el.checkVisibility) return el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  return el.getClientRects().length > 0;
 }
 
-function isJobPage(text) {
-  if (text.length < 200) return false;
-  return JOB_SIGNALS.filter(re => re.test(text)).length >= 2;
+// Visible text only. innerText skips hidden descendants, but on an element
+// that is itself hidden it falls back to all its text, so check that first.
+// This keeps hidden "thanks for applying" templates from triggering anything.
+function visibleText(el) {
+  if (!isRendered(el)) return '';
+  return JN.normalizeText(el.innerText || '');
 }
 
-function isConfirmationPage(text) {
-  return CONFIRMATION_PATTERNS.some(p => p.test(text));
+// The posting itself, preferring the main content region over nav/sidebars.
+function extractJobText() {
+  const main = document.querySelector('main, [role="main"], article');
+  const mainText = visibleText(main);
+  const text = mainText.length >= 400 ? mainText : visibleText(document.body);
+  return text.slice(0, JN.MAX_JOB_TEXT);
+}
+
+// Confirmation messages live in headings, dialogs, alerts, or the main area.
+function confirmationVisible() {
+  const candidates = document.querySelectorAll(
+    'h1, h2, h3, [role="dialog"], [role="alert"], [role="status"], [aria-live], main, [role="main"]'
+  );
+  for (const el of candidates) {
+    const text = visibleText(el);
+    if (text.length <= 3000 && JN.isConfirmationText(text)) return true;
+  }
+  // Short pages (typical "thanks" screens) can be checked as a whole.
+  const body = visibleText(document.body);
+  return body.length <= 3000 && JN.isConfirmationText(body);
 }
 
 function checkPage() {
-  const text = extractPageText();
+  if (overlayShown || !document.body) return;
 
-  if (isConfirmationPage(text) && !overlayShown) {
-    chrome.storage.local.get('autoDetect', data => {
-      if (data.autoDetect !== false) triggerAnalysis();
-    });
+  if (confirmationVisible()) {
+    triggerAutoAnalysis();
     return;
   }
 
-  if (isJobPage(text)) {
-    capturedJobText = text;
-    try { sessionStorage.setItem('__jn_jobText', text); } catch (e) {}
+  const text = extractJobText();
+  if (JN.isJobPage(text)) {
+    const hash = JN.hashText(text);
+    if (hash !== lastReportedHash) {
+      lastReportedHash = hash;
+      chrome.runtime.sendMessage({ type: 'JOB_SEEN', text }).catch(() => {});
+    }
   }
 }
 
-async function triggerAnalysis() {
+function triggerAutoAnalysis() {
   if (overlayShown) return;
   overlayShown = true;
 
-  let jobText = capturedJobText;
-  if (!jobText) {
-    try { jobText = sessionStorage.getItem('__jn_jobText'); } catch (e) {}
+  let port;
+  try {
+    port = chrome.runtime.connect({ name: 'analyze' });
+  } catch (e) {
+    return; // extension was reloaded; this page's script is stale
   }
-  if (!jobText) jobText = extractPageText();
 
-  showOverlayLoading();
-
-  const port = chrome.runtime.connect({ name: 'analyze' });
-
-  let responded = false;
-  const timeout = setTimeout(() => {
-    if (!responded) {
-      port.disconnect();
-      renderOverlayError('Request timed out. Please try again.');
-    }
-  }, 30000);
+  let done = false;
+  let timeout = null;
 
   port.onMessage.addListener(response => {
+    if (response.skip) {
+      done = true;
+      port.disconnect();
+      return; // nothing to do; leave overlayShown set so we don't re-ask
+    }
+    if (response.started) {
+      showOverlayLoading();
+      timeout = setTimeout(() => {
+        if (!done) {
+          done = true;
+          port.disconnect();
+          renderOverlayError('Request timed out. Please try again from the extension popup.');
+        }
+      }, 90000);
+      return;
+    }
+    done = true;
     clearTimeout(timeout);
-    responded = true;
     port.disconnect();
     if (!response.ok) {
-      renderOverlayError(response.error || 'Analysis failed.');
+      if (response.error === 'NO_API_KEY') renderSetupNeeded();
+      else renderOverlayError(response.error || 'Analysis failed.');
       return;
     }
     currentJob = response.result.job;
@@ -94,22 +108,19 @@ async function triggerAnalysis() {
   });
 
   port.onDisconnect.addListener(() => {
-    if (!responded) {
+    if (!done) {
+      done = true;
       clearTimeout(timeout);
-      renderOverlayError(chrome.runtime.lastError?.message || 'Connection closed unexpectedly.');
+      renderOverlayError('Connection closed unexpectedly. Try again from the extension popup.');
     }
   });
 
-  port.postMessage({ type: 'ANALYZE_JOB', jobText, config: CONFIG });
+  port.postMessage({ type: 'AUTO_ANALYZE' });
 }
 
 // ── Overlay ──
 
-function esc(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+const esc = JN.escHtml;
 
 function injectStyles() {
   if (document.getElementById('jn-styles')) return;
@@ -144,7 +155,8 @@ function injectStyles() {
       box-shadow: 0 24px 64px rgba(0,0,0,0.28), 0 0 0 1px rgba(0,0,0,0.06);
       animation: jn-slide-up 0.28s cubic-bezier(0.34, 1.4, 0.64, 1);
     }
-    #jn-modal * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* Zero specificity so the jn- classes below can set their own spacing. */
+    :where(#jn-modal *) { box-sizing: border-box; margin: 0; padding: 0; }
 
     /* ── Header ── */
     .jn-header {
@@ -274,6 +286,15 @@ function injectStyles() {
     .jn-send-all-btn:active { transform: scale(0.99); }
     .jn-send-all-btn:disabled { opacity: 0.55; cursor: default; }
 
+    .jn-bulk-actions { display: flex; gap: 8px; margin-top: 6px; }
+    .jn-bulk-actions .jn-send-all-btn { flex: 1; margin-top: 0; }
+    .jn-bulk-actions .jn-copy-btn { white-space: nowrap; }
+    .jn-hint { color: #999; font-size: 11.5px; text-align: center; margin-top: 8px; line-height: 1.4; }
+    .jn-link-btn {
+      margin-top: 4px; padding: 8px 14px; background: #5b5bd6; color: #fff;
+      border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+
     /* ── States ── */
     .jn-empty { text-align: center; color: #999; padding: 20px 0 8px; font-size: 13px; }
     .jn-error-wrap { display: flex; flex-direction: column; align-items: center; padding: 28px 0 16px; gap: 10px; }
@@ -283,38 +304,44 @@ function injectStyles() {
   document.head.appendChild(s);
 }
 
-function showOverlayLoading() {
+
+function overlayShell(subtitle, bodyHtml) {
   injectStyles();
   document.getElementById('jn-overlay')?.remove();
 
   const overlay = document.createElement('div');
   overlay.id = 'jn-overlay';
   overlay.innerHTML = `
-    <div id="jn-modal">
+    <div id="jn-modal" role="dialog" aria-label="Job Notifier">
       <div class="jn-header">
         <div class="jn-header-left">
           <div class="jn-header-dot"></div>
           <div class="jn-header-text">
             <div class="jn-title">Job Notifier</div>
-            <div class="jn-subtitle">Application detected</div>
+            <div class="jn-subtitle">${esc(subtitle)}</div>
           </div>
         </div>
-        <button class="jn-close">&#x2715;</button>
+        <button class="jn-close" aria-label="Close">&#x2715;</button>
       </div>
-      <div class="jn-body">
-        <div class="jn-loading">
-          <div class="jn-spinner"></div>
-          <div>
-            <div class="jn-loading-label">Finding matches…</div>
-            <div class="jn-loading-sub">Analyzing the job posting</div>
-          </div>
-        </div>
-      </div>
+      <div class="jn-body">${bodyHtml}</div>
     </div>
   `;
   document.body.appendChild(overlay);
   overlay.querySelector('.jn-close').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  return overlay;
+}
+
+function showOverlayLoading() {
+  overlayShell('Application detected', `
+    <div class="jn-loading">
+      <div class="jn-spinner"></div>
+      <div>
+        <div class="jn-loading-label">Finding matches…</div>
+        <div class="jn-loading-sub">Analyzing the job posting you just applied to</div>
+      </div>
+    </div>
+  `);
 }
 
 function renderOverlayResults() {
@@ -346,7 +373,7 @@ function renderOverlayResults() {
         <div class="jn-match-header">
           <label class="jn-match-select">
             <input type="checkbox" class="jn-checkbox" data-index="${i}" checked>
-            <div class="jn-avatar">${esc(m.name[0].toUpperCase())}</div>
+            <div class="jn-avatar">${esc((m.name || '?')[0].toUpperCase())}</div>
             <span class="jn-match-name">${esc(m.name)}</span>
           </label>
           <span class="jn-match-score">${Math.round(m.score * 100)}% match</span>
@@ -360,12 +387,16 @@ function renderOverlayResults() {
     `).join('')
     : `<div class="jn-empty">No strong matches for this posting.</div>`;
 
-  const sendAllHtml = count
-    ? `<button class="jn-send-all-btn">Send to all checked</button>`
+  const bulkHtml = count > 1
+    ? `<div class="jn-bulk-actions">
+         <button class="jn-send-all-btn">Open next email</button>
+         <button class="jn-copy-btn jn-copy-all-btn">Copy all</button>
+       </div>
+       <div class="jn-hint">Browsers only allow one email window per click, so this opens the checked emails one at a time.</div>`
     : '';
 
   const body = modal.querySelector('.jn-body');
-  body.innerHTML = jobHtml + matchesHtml + sendAllHtml;
+  body.innerHTML = jobHtml + matchesHtml + bulkHtml;
 
   body.querySelectorAll('.jn-message-box').forEach(ta => {
     ta.addEventListener('input', e => {
@@ -373,47 +404,77 @@ function renderOverlayResults() {
     });
   });
 
+  const sent = new Set();
+  const sendAllBtn = body.querySelector('.jn-send-all-btn');
+
+  function checkedIndexes() {
+    return [...body.querySelectorAll('.jn-checkbox:checked')].map(cb => parseInt(cb.dataset.index));
+  }
+  function updateSendAll() {
+    if (!sendAllBtn) return;
+    const left = checkedIndexes().filter(i => !sent.has(i)).length;
+    sendAllBtn.textContent = left ? `Open next email (${left} left)` : 'All checked emails opened';
+    sendAllBtn.disabled = !left;
+  }
+  function send(i) {
+    window.open(JN.mailtoUrl(currentMatches[i], currentJob));
+    sent.add(i);
+    updateSendAll();
+  }
+
   body.querySelectorAll('.jn-send-btn').forEach(btn => {
     btn.addEventListener('click', e => {
-      openMailto(currentMatches[parseInt(e.target.dataset.index)]);
+      send(parseInt(e.target.dataset.index));
       flashBtn(e.target, 'Opened!');
     });
   });
 
-  body.querySelectorAll('.jn-copy-btn').forEach(btn => {
+  body.querySelectorAll('.jn-card-actions .jn-copy-btn').forEach(btn => {
     btn.addEventListener('click', async e => {
       await navigator.clipboard.writeText(currentMatches[parseInt(e.target.dataset.index)].message).catch(() => {});
       flashBtn(e.target, 'Copied!');
     });
   });
 
-  body.querySelector('.jn-send-all-btn')?.addEventListener('click', e => {
-    body.querySelectorAll('.jn-checkbox:checked').forEach(cb => {
-      openMailto(currentMatches[parseInt(cb.dataset.index)]);
-    });
-    flashBtn(e.target, 'All opened!');
+  body.querySelectorAll('.jn-checkbox').forEach(cb => cb.addEventListener('change', updateSendAll));
+
+  sendAllBtn?.addEventListener('click', () => {
+    const next = checkedIndexes().find(i => !sent.has(i));
+    if (next !== undefined) send(next);
   });
+
+  body.querySelector('.jn-copy-all-btn')?.addEventListener('click', async e => {
+    const selected = checkedIndexes().map(i => currentMatches[i]);
+    await navigator.clipboard.writeText(JN.combinedMessages(selected, currentJob)).catch(() => {});
+    flashBtn(e.target, 'Copied!');
+  });
+
+  updateSendAll();
 }
 
 function renderOverlayError(msg) {
-  const modal = document.getElementById('jn-modal');
-  if (!modal) return;
-  const body = modal.querySelector('.jn-body');
-  if (body) {
-    body.innerHTML = `
-      <div class="jn-error-wrap">
-        <div class="jn-error-icon">⚠️</div>
-        <div class="jn-error-msg">${esc(msg)}</div>
-      </div>
-    `;
-  }
+  const body = document.querySelector('#jn-modal .jn-body');
+  if (!body) return;
+  body.innerHTML = `
+    <div class="jn-error-wrap">
+      <div class="jn-error-icon">⚠️</div>
+      <div class="jn-error-msg">${esc(msg)}</div>
+    </div>
+  `;
 }
 
-function openMailto(match) {
-  const subject = currentJob?.title && currentJob?.company
-    ? `Job opportunity: ${currentJob.title} at ${currentJob.company}`
-    : 'Job opportunity';
-  window.open(`mailto:${encodeURIComponent(match.contact || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(match.message)}`);
+function renderSetupNeeded() {
+  if (!document.getElementById('jn-modal')) overlayShell('Setup needed', '');
+  const body = document.querySelector('#jn-modal .jn-body');
+  body.innerHTML = `
+    <div class="jn-error-wrap">
+      <div class="jn-error-msg" style="color:#444">Add your Anthropic API key in the extension settings to get friend matches for jobs you apply to.</div>
+      <button class="jn-link-btn">Open settings</button>
+    </div>
+  `;
+  body.querySelector('.jn-link-btn').addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS' }).catch(() => {});
+  });
 }
 
 function flashBtn(btn, label) {
@@ -423,13 +484,12 @@ function flashBtn(btn, label) {
   setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
 }
 
-// ── Message handler (keeps popup working) ──
+// ── Popup support ──
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type !== 'GET_PAGE_TEXT') return;
-  const text = extractPageText().slice(0, 3000);
-  sendResponse({ text, isJobPage: isJobPage(text), length: text.length });
-  return true;
+  const text = extractJobText();
+  sendResponse({ text, isJobPage: JN.isJobPage(text) });
 });
 
 // ── Init ──
@@ -438,19 +498,17 @@ function startWatching() {
   checkPage();
 
   const observer = new MutationObserver(() => {
-    // Handle SPA URL changes
+    // SPA navigation: reset per-page state.
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       overlayShown = false;
-      capturedJobText = null;
     }
-
     if (overlayShown) return;
     clearTimeout(checkTimer);
-    checkTimer = setTimeout(checkPage, 600);
+    checkTimer = setTimeout(checkPage, 1000);
   });
 
-  observer.observe(document.body, { subtree: true, childList: true });
+  observer.observe(document.body, { subtree: true, childList: true, characterData: true });
 }
 
 if (document.readyState === 'loading') {

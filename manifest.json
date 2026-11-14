@@ -1,11 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Job Notifier",
-  "version": "1.0.0",
-  "description": "Extract job details and draft messages for matching friends",
+  "version": "1.1.0",
+  "description": "When you apply to a job, drafts personalized messages for friends who'd be a good fit.",
   "permissions": [
-    "activeTab",
-    "scripting",
     "storage",
     "clipboardWrite"
   ],
@@ -20,10 +18,20 @@
       "128": "icons/icon128.png"
     }
   },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["config.js", "content.js"]
+      "matches": ["https://*/*", "http://*/*"],
+      "js": ["lib/core.js", "content.js"],
+      "run_at": "document_idle"
     }
   ],
   "background": {

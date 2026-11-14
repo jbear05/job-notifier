@@ -1,7 +1,7 @@
 [
   {
     "name": "Alex",
-    "contact": "jairg2005@gmail.com",
+    "contact": "alex@example.com",
     "skills": ["Python", "React", "backend", "REST APIs"],
     "interests": ["fintech", "developer tools", "SaaS"],
     "level": "internship",
