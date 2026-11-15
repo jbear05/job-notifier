@@ -1,182 +1,121 @@
-let friends = [];
 let currentMatches = [];
 let currentJob = null;
 
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
-  // Load and wire toggle
   const toggle = document.getElementById("auto-toggle");
-  chrome.storage.local.get("autoDetect", data => {
-    toggle.checked = data.autoDetect !== false;
-  });
-  toggle.addEventListener("change", () => {
-    chrome.storage.local.set({ autoDetect: toggle.checked });
-  });
+  const { autoDetect } = await chrome.storage.local.get("autoDetect");
+  toggle.checked = autoDetect !== false;
+  toggle.addEventListener("change", () => chrome.storage.local.set({ autoDetect: toggle.checked }));
 
-  showState("loading");
+  document.getElementById("settings-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
+  document.getElementById("error-settings-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
+  document.getElementById("manual-analyze-btn").addEventListener("click", onAnalyzeClick);
+  document.getElementById("send-all-btn").addEventListener("click", sendNext);
+  document.getElementById("copy-all-btn").addEventListener("click", copyAll);
 
-  // Load friends list
-  try {
-    const resp = await fetch(chrome.runtime.getURL("friends.json"));
-    friends = await resp.json();
-  } catch (e) {
-    showError("Could not load friends list.");
+  const { settings } = await chrome.storage.local.get("settings");
+  if (!settings?.apiKey) {
+    showError("Add your Anthropic API key in settings to get started.", true);
     return;
   }
 
-  // Validate API key
-  if (!CONFIG.ANTHROPIC_API_KEY || CONFIG.ANTHROPIC_API_KEY.startsWith("sk-ant-YOUR")) {
-    showError(
-      "API key not configured. Open <code>config.js</code> and replace the placeholder with your Anthropic API key."
-    );
-    return;
-  }
-
-  // Request page text from content script
+  // Opening the popup never calls Claude by itself; it just pre-fills the
+  // detected posting so you can review it and click the button.
   let tab;
   try {
     [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   } catch (e) {
-    showError("Could not access the active tab.");
+    showInput("Paste the job posting text below:");
     return;
   }
 
-  chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_TEXT" }, async (response) => {
+  chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_TEXT" }, response => {
     if (chrome.runtime.lastError || !response) {
-      showManualFallback("Could not read the page. Paste the job text below:");
-      return;
+      showInput("Couldn't read this page. Paste the job posting text below:");
+    } else if (response.isJobPage) {
+      showInput("Found a job posting on this page. Check the text, then find matches:", response.text);
+    } else {
+      showInput("This doesn't look like a job posting. Paste the job text below:");
     }
-
-    if (!response.isJobPage || response.length < 200) {
-      showManualFallback("This doesn't look like a job posting. Paste the job text below:");
-      return;
-    }
-
-    await runAnalysis(response.text);
   });
 }
 
-async function runAnalysis(jobText) {
+async function onAnalyzeClick() {
+  const text = document.getElementById("manual-input").value.trim();
+  if (text.length < 50) {
+    document.getElementById("manual-error").textContent = "Please paste more text (at least 50 characters).";
+    return;
+  }
+  document.getElementById("manual-error").textContent = "";
   showState("loading");
 
   try {
-    const result = await callClaude(jobText);
+    const result = await analyzeViaBackground(text);
+    currentJob = result.job;
     currentMatches = result.matches || [];
-    renderResults(result.job, currentMatches);
+    renderResults();
   } catch (e) {
-    showError(`Analysis failed: ${e.message}`);
+    if (e.message === "NO_API_KEY") showError("Add your Anthropic API key in settings to get started.", true);
+    else showError(`Analysis failed: ${e.message}`);
   }
 }
 
-async function callClaude(jobText, retry = false) {
-  const activeFriends = friends.filter(f => f.notify !== false);
-  const friendsJson = JSON.stringify(activeFriends, null, 2);
-
-  const strictInstruction = retry
-    ? "IMPORTANT: Your entire response must be ONLY the JSON object. No explanation, no markdown, no code fences."
-    : "";
-
-  const prompt = `You are a job notification assistant. Given a job posting and a list of friends, do two things:
-
-1. Extract the job details as JSON.
-2. For each friend with notify=true, decide if this job is relevant (score 0.0–1.0). If score >= ${CONFIG.RELEVANCE_THRESHOLD}, draft a short casual message (2–3 sentences) as if the user is texting the friend. The message should mention why it fits them specifically — reference their skills or interests.
-
-Friends list:
-${friendsJson}
-
-Job posting text:
-${jobText}
-
-${strictInstruction}
-Respond ONLY with valid JSON in exactly this shape:
-{
-  "job": { "title": "", "company": "", "skills": [], "level": "", "location": "", "remote": false },
-  "matches": [
-    { "name": "", "score": 0.0, "message": "" }
-  ]
-}
-Only include friends with score >= ${CONFIG.RELEVANCE_THRESHOLD} in matches. Do not include any text outside the JSON.`;
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": CONFIG.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true"
-    },
-    body: JSON.stringify({
-      model: CONFIG.MODEL,
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }]
-    })
+// All Claude calls go through the background worker, so there's one code path.
+function analyzeViaBackground(jobText) {
+  return new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect({ name: "analyze" });
+    let done = false;
+    port.onMessage.addListener(msg => {
+      done = true;
+      port.disconnect();
+      msg.ok ? resolve(msg.result) : reject(new Error(msg.error || "Analysis failed."));
+    });
+    port.onDisconnect.addListener(() => {
+      if (!done) reject(new Error("Connection closed unexpectedly."));
+    });
+    port.postMessage({ type: "ANALYZE_JOB", jobText });
   });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error?.message || `API error ${response.status}`);
-  }
-
-  const data = await response.json();
-  const raw = data.content?.[0]?.text || "";
-
-  // Strip markdown code fences if present
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-
-  let parsed;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch (e) {
-    if (!retry) {
-      return callClaude(jobText, true);
-    }
-    throw new Error("Response was not valid JSON after retry.");
-  }
-
-  return parsed;
 }
 
-function renderResults(job, matches) {
-  showState("results");
-  currentJob = job;
+// ── Results ──
 
-  const jobCard = document.getElementById("job-card");
-  jobCard.innerHTML = `
-    <div class="job-title">${escHtml(job.title || "Unknown title")}</div>
+const sent = new Set();
+
+function renderResults() {
+  showState("results");
+  sent.clear();
+  const job = currentJob || {};
+  const esc = JN.escHtml;
+
+  document.getElementById("job-card").innerHTML = `
+    <div class="job-title">${esc(job.title || "Unknown title")}</div>
     <div class="job-meta">
-      <span>${escHtml(job.company || "Unknown company")}</span>
-      ${job.level ? `<span class="tag">${escHtml(job.level)}</span>` : ""}
+      <span>${esc(job.company || "Unknown company")}</span>
+      ${job.level ? `<span class="tag">${esc(job.level)}</span>` : ""}
       ${job.remote ? `<span class="tag tag-remote">Remote</span>` : ""}
-      ${job.location ? `<span class="tag-location">${escHtml(job.location)}</span>` : ""}
+      ${job.location ? `<span class="tag-location">${esc(job.location)}</span>` : ""}
     </div>
-    ${job.skills?.length ? `<div class="job-skills">${job.skills.map(s => `<span class="skill">${escHtml(s)}</span>`).join("")}</div>` : ""}
+    ${job.skills?.length ? `<div class="job-skills">${job.skills.map(s => `<span class="skill">${esc(s)}</span>`).join("")}</div>` : ""}
   `;
 
   const matchList = document.getElementById("match-list");
-  const emptyState = document.getElementById("empty-state");
-  const sendAllBtn = document.getElementById("send-all-btn");
+  const count = currentMatches.length;
+  document.getElementById("empty-state").hidden = count > 0;
+  document.getElementById("bulk-actions").hidden = count < 2;
+  document.getElementById("bulk-hint").hidden = count < 2;
 
-  if (!matches.length) {
-    matchList.innerHTML = "";
-    emptyState.hidden = false;
-    sendAllBtn.hidden = true;
-    return;
-  }
-
-  emptyState.hidden = true;
-  sendAllBtn.hidden = false;
-
-  matchList.innerHTML = matches.map((m, i) => `
+  matchList.innerHTML = currentMatches.map((m, i) => `
     <div class="match-card" data-index="${i}">
       <div class="match-header">
         <label class="match-select">
           <input type="checkbox" class="friend-checkbox" data-index="${i}" checked>
-          <span class="match-name">${escHtml(m.name)}</span>
+          <span class="match-name">${esc(m.name)}</span>
         </label>
         <span class="match-score" title="Relevance score">${Math.round(m.score * 100)}% match</span>
       </div>
-      <textarea class="message-box" rows="4" data-index="${i}">${escHtml(m.message)}</textarea>
+      <textarea class="message-box" rows="4" data-index="${i}">${esc(m.message)}</textarea>
       <div class="card-actions">
         <button class="send-btn" data-index="${i}">Send</button>
         <button class="copy-btn" data-index="${i}">Copy</button>
@@ -184,63 +123,59 @@ function renderResults(job, matches) {
     </div>
   `).join("");
 
-  // Keep in-memory messages in sync with edits
   matchList.querySelectorAll("textarea").forEach(ta => {
     ta.addEventListener("input", e => {
-      const idx = parseInt(e.target.dataset.index);
-      currentMatches[idx].message = e.target.value;
+      currentMatches[parseInt(e.target.dataset.index)].message = e.target.value;
     });
   });
-
-  // Per-card send buttons
   matchList.querySelectorAll(".send-btn").forEach(btn => {
     btn.addEventListener("click", e => {
-      const idx = parseInt(e.target.dataset.index);
-      openMailto(currentMatches[idx]);
+      send(parseInt(e.target.dataset.index));
       flashButton(e.target, "Opened!");
     });
   });
-
-  // Per-card copy buttons
   matchList.querySelectorAll(".copy-btn").forEach(btn => {
     btn.addEventListener("click", async e => {
-      const idx = parseInt(e.target.dataset.index);
-      await copyToClipboard(currentMatches[idx].message);
+      await copyToClipboard(currentMatches[parseInt(e.target.dataset.index)].message);
       flashButton(e.target, "Copied!");
     });
   });
+  matchList.querySelectorAll(".friend-checkbox").forEach(cb => cb.addEventListener("change", updateSendAll));
+
+  updateSendAll();
 }
 
-document.getElementById("send-all-btn")?.addEventListener("click", () => {
-  const checkboxes = document.querySelectorAll(".friend-checkbox:checked");
-  checkboxes.forEach(cb => {
-    const idx = parseInt(cb.dataset.index);
-    openMailto(currentMatches[idx]);
-  });
+function checkedIndexes() {
+  return [...document.querySelectorAll(".friend-checkbox:checked")].map(cb => parseInt(cb.dataset.index));
+}
+
+function send(i) {
+  window.open(JN.mailtoUrl(currentMatches[i], currentJob));
+  sent.add(i);
+  updateSendAll();
+}
+
+// Browsers block all but the first window.open per click, so "send all"
+// opens one checked email per click instead of firing them all at once.
+function sendNext() {
+  const next = checkedIndexes().find(i => !sent.has(i));
+  if (next !== undefined) send(next);
+}
+
+function updateSendAll() {
   const btn = document.getElementById("send-all-btn");
-  flashButton(btn, "All opened!");
-});
-
-document.getElementById("manual-analyze-btn")?.addEventListener("click", async () => {
-  const text = document.getElementById("manual-input").value.trim();
-  if (text.length < 50) {
-    document.getElementById("manual-error").textContent = "Please paste more text (at least 50 characters).";
-    return;
-  }
-  document.getElementById("manual-error").textContent = "";
-  await runAnalysis(text);
-});
-
-function openMailto(match) {
-  const friend = friends.find(f => f.name === match.name);
-  const contact = friend?.contact || "";
-  const subject = currentJob?.title && currentJob?.company
-    ? `Job opportunity: ${currentJob.title} at ${currentJob.company}`
-    : "Job opportunity";
-  window.open(`mailto:${encodeURIComponent(contact)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(match.message)}`);
+  const left = checkedIndexes().filter(i => !sent.has(i)).length;
+  btn.textContent = left ? `Open next email (${left} left)` : "All checked emails opened";
+  btn.disabled = !left;
 }
 
-// --- UI helpers ---
+async function copyAll(e) {
+  const selected = checkedIndexes().map(i => currentMatches[i]);
+  await copyToClipboard(JN.combinedMessages(selected, currentJob));
+  flashButton(e.target, "Copied!");
+}
+
+// ── UI helpers ──
 
 function showState(state) {
   document.getElementById("loading").hidden = state !== "loading";
@@ -249,21 +184,22 @@ function showState(state) {
   document.getElementById("manual-fallback").hidden = state !== "manual";
 }
 
-function showError(html) {
+function showError(text, offerSettings = false) {
   showState("error");
-  document.getElementById("error-message").innerHTML = html;
+  document.getElementById("error-message").textContent = text;
+  document.getElementById("error-settings-btn").hidden = !offerSettings;
 }
 
-function showManualFallback(msg) {
+function showInput(msg, prefill = "") {
   showState("manual");
   document.getElementById("fallback-message").textContent = msg;
+  document.getElementById("manual-input").value = prefill;
 }
 
 async function copyToClipboard(text) {
   try {
     await navigator.clipboard.writeText(text);
   } catch (e) {
-    // Fallback for older contexts
     const ta = document.createElement("textarea");
     ta.value = text;
     document.body.appendChild(ta);
@@ -280,13 +216,6 @@ function flashButton(btn, label) {
   setTimeout(() => {
     btn.textContent = original;
     btn.disabled = false;
+    if (btn.id === "send-all-btn") updateSendAll();
   }, 1500);
-}
-
-function escHtml(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
