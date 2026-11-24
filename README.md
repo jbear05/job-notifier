@@ -12,6 +12,7 @@ When you submit a job application, a popup appears with a list of matched friend
 - Matches friends by skills, interests, and experience level using Claude
 - Drafts a personalized message for each match explaining why the role fits them
 - Send or copy messages per friend, step through all checked emails, or copy them all at once
+- Optionally add the recruiter's LinkedIn for the role, and it's included in every email (kept local, never sent to Claude)
 - Toggle auto-detection on/off from the extension popup
 - Manual mode: paste any job posting text to run the analysis yourself
 

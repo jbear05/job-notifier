@@ -126,3 +126,40 @@ test('mailto and combined messages encode correctly', () => {
 test('escHtml escapes markup', () => {
   assert.equal(JN.escHtml(`<a href="x">'&`), '&lt;a href=&quot;x&quot;&gt;&#39;&amp;');
 });
+
+test('normalizeRecruiterUrl accepts LinkedIn links loosely and rejects others', () => {
+  assert.equal(JN.normalizeRecruiterUrl(''), '');
+  assert.equal(JN.normalizeRecruiterUrl('   '), '');
+  assert.equal(JN.normalizeRecruiterUrl('https://www.linkedin.com/in/jane-doe/'), 'https://www.linkedin.com/in/jane-doe/');
+  assert.equal(JN.normalizeRecruiterUrl('  linkedin.com/in/jane '), 'https://linkedin.com/in/jane');
+  assert.equal(JN.normalizeRecruiterUrl('http://uk.linkedin.com/in/jane'), 'https://uk.linkedin.com/in/jane');
+  assert.equal(JN.normalizeRecruiterUrl('https://www.LinkedIn.com/in/jane'), 'https://www.linkedin.com/in/jane');
+  for (const bad of [
+    'jane@example.com',
+    'https://example.com/in/jane',
+    'https://linkedin.com.evil.com/in/jane',
+    'https://notlinkedin.com/in/jane',
+    'javascript:alert(1)',
+    'https://user:pw@linkedin.com/in/jane',
+    'not a url at all',
+  ]) {
+    assert.equal(JN.normalizeRecruiterUrl(bad), null, bad);
+  }
+});
+
+test('recruiter link is added to emails and copied text only when given', () => {
+  const job = { title: 'Intern', company: 'Acme' };
+  const match = { name: 'Alex', contact: 'a@b.com', message: 'Hi' };
+  const rec = 'https://www.linkedin.com/in/jane/';
+
+  assert.equal(JN.mailtoUrl(match, job, ''), JN.mailtoUrl(match, job));
+  assert.equal(JN.combinedMessages([match], job, ''), JN.combinedMessages([match], job));
+  assert.equal(JN.withRecruiter('Hi', ''), 'Hi');
+
+  const body = decodeURIComponent(JN.mailtoUrl(match, job, rec).split('&body=')[1]);
+  assert.equal(body, `Hi\n\nRecruiter contact for this role: ${rec}`);
+
+  const combined = JN.combinedMessages([match, { name: 'Riley', message: 'Yo' }], job, rec);
+  assert.equal(combined.split(rec).length - 1, 1, 'link appears once');
+  assert.match(combined, /^Job opportunity: Intern at Acme\nRecruiter contact for this role: /);
+});

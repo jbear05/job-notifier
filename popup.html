@@ -46,6 +46,14 @@
   <div id="results" hidden>
     <div id="job-card" class="job-card"></div>
 
+    <div id="recruiter" class="recruiter" hidden>
+      <label class="recruiter-label" for="recruiter-input">Do you have a recruiter contact for this position?</label>
+      <p class="recruiter-sub">Optional. Paste their LinkedIn and it's added to each email and to Copy all.</p>
+      <input id="recruiter-input" class="recruiter-input" type="url" inputmode="url" autocomplete="off"
+             placeholder="https://www.linkedin.com/in/…">
+      <p id="recruiter-status" class="recruiter-status" aria-live="polite"></p>
+    </div>
+
     <div id="match-list"></div>
 
     <div id="empty-state" class="empty-state" hidden>

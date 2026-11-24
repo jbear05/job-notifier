@@ -444,3 +444,59 @@ body {
   margin-top: 8px;
   line-height: 1.4;
 }
+
+/* ── Recruiter contact ── */
+.recruiter {
+  border: 1px dashed #d8d6f2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.recruiter-label {
+  display: block;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: #333;
+  margin-bottom: 2px;
+}
+
+.recruiter-sub {
+  color: #999;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.recruiter-input {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: #222;
+  background: #fafafa;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.recruiter-input:focus {
+  border-color: #5b5bd6;
+  background: #fff;
+}
+
+.recruiter-input.invalid {
+  border-color: #e0a19a;
+}
+
+.recruiter-status {
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+.recruiter-status:empty {
+  display: none;
+}
+
+.recruiter-status.ok { color: #15622f; }
+.recruiter-status.bad { color: #c0392b; }

@@ -107,6 +107,14 @@ See `JOB_SIGNALS` and `CONFIRMATION_PATTERNS` in `lib/core.js`. Add a phrase the
 
 `mailto:` links open your email client; you still press Send there. Browsers only allow one new window per click, so **Open next email** opens one checked email per click and counts down. **Copy all** copies every checked message as one block.
 
+### Recruiter contact (optional)
+
+When there are matches, the share step asks "Do you have a recruiter contact for this position?" You can paste a LinkedIn URL there; leave it blank and nothing changes.
+
+- `JN.normalizeRecruiterUrl()` checks it loosely: any `http(s)` link on `linkedin.com` or a subdomain (`www.`, `uk.`, …). A missing scheme is fine (`linkedin.com/in/jane` becomes `https://linkedin.com/in/jane`). Anything else shows a warning and is left out.
+- A valid link is added as a last line, `Recruiter contact for this role: <url>`, to each email body and per-friend **Copy**, and once under the subject line in **Copy all**. The editable draft boxes are not changed.
+- The link is only held in memory for the open overlay or popup. It is never saved and never sent to Claude: the analysis request has already finished by the time you see the field.
+
 ---
 
 ## Known limitations
