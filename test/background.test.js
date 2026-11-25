@@ -1,7 +1,7 @@
 // Runs background.js in a vm with an in-memory chrome.* so service-worker flows
 // can be tested in Node. Storage calls resolve on the next macrotask, like
 // Chrome's async storage, so handlers that run at the same time interleave.
-// Test names cite the criterion or the review round 1 finding they check.
+// Test names cite the criterion or the review finding they check.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -54,7 +54,7 @@ function event() {
 }
 
 // Auto-detect on, all-sites access granted, a key, and one friend.
-function loadWorker() {
+function loadWorker({ fetch = async () => { throw new Error('no network in tests'); }, abortSignal = AbortSignal } = {}) {
   const local = storageArea({
     autoDetect: true,
     settings: { apiKey: 'sk-ant-test' },
@@ -78,8 +78,7 @@ function loadWorker() {
     tabs: { onUpdated: event(), onRemoved: event(), query: async () => [], sendMessage: () => Promise.resolve(), create: async () => {} },
   };
   const ctx = {
-    chrome, URL, TextEncoder, AbortController, AbortSignal, setTimeout, clearTimeout,
-    fetch: async () => { throw new Error('no network in tests'); },
+    chrome, URL, TextEncoder, AbortController, AbortSignal: abortSignal, setTimeout, clearTimeout, fetch,
   };
   vm.createContext(ctx);
   ctx.importScripts = (...files) => {
@@ -96,8 +95,17 @@ function loadWorker() {
   return { chrome, session, send };
 }
 
-const content = (tabId, url) => ({ id: RID, url, tab: { id: tabId, url }, frameId: 0 });
-const overlay = (tabId, url) => ({ id: RID, url: `chrome-extension://${RID}/overlay.html`, tab: { id: tabId, url }, frameId: 3 });
+const documentIds = new Map();
+
+function documentId(tabId, frameId, url) {
+  // Chrome keeps the opaque document ID the same after a fragment change.
+  const key = `${tabId}:${frameId}:${url.split('#')[0]}`;
+  if (!documentIds.has(key)) documentIds.set(key, `document-${documentIds.size + 1}`);
+  return documentIds.get(key);
+}
+
+const content = (tabId, url) => ({ id: RID, url, tab: { id: tabId, url }, frameId: 0, documentId: documentId(tabId, 0, url) });
+const overlay = (tabId, url) => ({ id: RID, url: `chrome-extension://${RID}/overlay.html`, tab: { id: tabId, url }, frameId: 3, documentId: documentId(tabId, 3, url) });
 const jobSeen = (n = '') => ({ type: 'JOB_SEEN', text: `${POSTING} ${n}`, title: `Job ${n}` });
 const TABS = [1, 2, 3, 4, 5];
 
@@ -159,4 +167,111 @@ test('security low 2: a stored posting keeps the hostname, never the path or que
   const reply = await send({ type: 'OVERLAY_STATE' }, overlay(12, 'https://ats.example/applications/99/done?session=abc'));
   assert.equal(reply?.state, 'prompt');
   assert.equal(reply.posting.meta, 'Viewed on kestrel-grid.example just now', 'the prompt still names the site');
+});
+
+test('criterion 31: a confirmation still processing when its tab navigates cannot leave a prompt', async () => {
+  const { chrome, send } = loadWorker();
+  const tabId = 13;
+  await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
+
+  const local = chrome.storage.local;
+  const get = local.get.bind(local);
+  let releaseSettings;
+  const settingsGate = new Promise(resolve => { releaseSettings = resolve; });
+  local.get = async keys => {
+    await settingsGate;
+    return get(keys);
+  };
+  const handling = send({ type: 'CONFIRMATION_SEEN' }, content(tabId, 'https://ats.example/done'));
+  chrome.tabs.onUpdated.fire(tabId, { status: 'loading' }, { id: tabId, url: 'https://ats.example/next' });
+  await settle();
+  releaseSettings();
+  await handling;
+  await settle();
+
+  const reply = await send({ type: 'OVERLAY_STATE' }, overlay(tabId, 'https://ats.example/next'));
+  assert.equal(reply?.state, 'none', 'the previous document cannot restore a prompt after a full navigation');
+});
+
+test('criterion 31: a prompt lookup waits for a full-navigation cleanup already in progress', async () => {
+  const { chrome, send } = loadWorker();
+  const tabId = 14;
+  await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(tabId, 'https://ats.example/done')))?.show, true);
+
+  chrome.tabs.onUpdated.fire(tabId, { status: 'loading' }, { id: tabId, url: 'https://ats.example/next' });
+  const reply = await send({ type: 'OVERLAY_STATE' }, overlay(tabId, 'https://ats.example/next'));
+  assert.equal(reply?.state, 'none', 'lookups cannot return the previous document’s prompt during cleanup');
+});
+
+test('criterion 31: the worker does not acknowledge readiness when reading overlay settings fails', async () => {
+  const { chrome, send } = loadWorker();
+  const tabId = 15;
+  const done = 'https://ats.example/done';
+  const messages = [];
+  chrome.tabs.sendMessage = async (_tabId, msg) => { messages.push(msg.type); };
+  await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(tabId, done)))?.show, true);
+  chrome.storage.local.get = async () => { throw new Error('settings unavailable'); };
+
+  const reply = await send({ type: 'OVERLAY_STATE' }, overlay(tabId, done));
+  assert.notEqual(reply?.state, 'prompt');
+  assert.deepEqual(messages, [], 'a failed state request leaves the host watchdog active');
+});
+
+test('criterion 31: only the rendered overlay can acknowledge readiness', async () => {
+  const { chrome, send } = loadWorker();
+  const tabId = 16;
+  const done = 'https://ats.example/done';
+  const hostSender = content(tabId, done);
+  const frameSender = overlay(tabId, done);
+  const messages = [];
+  chrome.tabs.sendMessage = async (id, msg) => { messages.push([id, msg.type]); };
+  await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, hostSender))?.show, true);
+  const reply = await send({ type: 'OVERLAY_STATE' }, frameSender);
+  assert.equal(reply?.state, 'prompt');
+  await send({ type: 'OVERLAY_READY' }, hostSender);
+  assert.deepEqual(messages, [], 'neither a state reply nor the host message can confirm readiness');
+
+  await send({ type: 'OVERLAY_READY' }, { ...frameSender, frameId: 4 });
+  await send({ type: 'OVERLAY_READY' }, { ...frameSender, documentId: 'different-document' });
+  assert.deepEqual(messages, [], 'an acknowledgment has to come from the frame and document that loaded the prompt');
+
+  await send({ type: 'OVERLAY_READY' }, frameSender);
+  assert.deepEqual(messages, [[tabId, 'OVERLAY_READY']]);
+});
+
+test('review 2 privacy: the stored posting site is the hostname without a non-default port', async () => {
+  const { session, send } = loadWorker();
+  const tabId = 17;
+  await send(jobSeen(), content(tabId, 'http://www.kestrel-grid.example:12345/posting'));
+  assert.equal(session.data.jobs[tabId].url, 'www.kestrel-grid.example');
+});
+
+test('review 2 timeout: the worker reports a fetch timeout before Chrome’s 30-second limit', async () => {
+  const signal = AbortSignal.abort(new DOMException('Test deadline reached', 'TimeoutError'));
+  let deadline;
+  const { chrome } = loadWorker({
+    abortSignal: { timeout: ms => { deadline = ms; return signal; } },
+    fetch: async (_url, options) => { throw options.signal.reason; },
+  });
+  const response = new Promise(resolve => {
+    const port = {
+      name: 'analyze',
+      sender: { id: RID, url: `chrome-extension://${RID}/popup.html` },
+      onMessage: event(),
+      postMessage: resolve,
+    };
+    chrome.runtime.onConnect.fire(port);
+    port.onMessage.fire({ type: 'ANALYZE_JOB', jobText: POSTING });
+  });
+
+  const reply = await response;
+  assert.ok(deadline > 0 && deadline < 30_000, `worker timeout was ${deadline} ms`);
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error.action, 'retry');
+  assert.match(reply.error.title, /time/i);
+  const displayedSeconds = reply.error.body.match(/\b(\d+) seconds\b/);
+  if (displayedSeconds) assert.equal(Number(displayedSeconds[1]), deadline / 1000);
 });

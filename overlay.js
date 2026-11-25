@@ -37,6 +37,9 @@ async function load() {
   $('scrim').hidden = false;
   $('dialog').hidden = false;
   showPrompt(reply.hasKey);
+  // The host frame remains noninteractive until this prompt is in the DOM.
+  await chrome.runtime.sendMessage({ type: 'OVERLAY_READY' }).catch(() => {});
+  if (state === 'prompt') heading.focus();
 }
 
 function showPrompt(hasKey) {

@@ -65,21 +65,18 @@ function showFrame() {
   frame = document.createElement('iframe');
   frame.title = 'Job Notifier';
   frame.allow = 'clipboard-write';
+  frame.tabIndex = -1;
   const style = {
     position: 'fixed', inset: '0', width: '100%', height: '100%', 'max-width': 'none', 'max-height': 'none',
     margin: '0', padding: '0', border: '0', display: 'block', visibility: 'visible', opacity: '1',
-    background: 'transparent', 'color-scheme': 'normal', 'z-index': '2147483647',
+    background: 'transparent', 'color-scheme': 'normal', 'z-index': '2147483647', 'pointer-events': 'none',
   };
   for (const [prop, value] of Object.entries(style)) frame.style.setProperty(prop, value, 'important');
   frame.src = chrome.runtime.getURL('overlay.html');
-  // Focus may not land inside the frame until its page has loaded.
-  frame.addEventListener('load', () => frame?.focus());
-  // Fail-safe: if the worker doesn't confirm the overlay is showing its prompt
-  // (OVERLAY_READY), remove the frame rather than leave an invisible layer over the page.
+  // Let the host remain clickable until the rendered overlay acknowledges readiness.
   readyTimer = setTimeout(dismiss, READY_TIMEOUT_MS);
   window.addEventListener('keydown', onHostKeydown, true);
   document.documentElement.appendChild(frame);
-  frame.focus();
 }
 
 // Escape reaches the host document only when focus has left the frame.
@@ -98,6 +95,7 @@ function dismiss() {
 function closeFrame() {
   if (!frame) return;
   clearTimeout(readyTimer);
+  readyTimer = null;
   window.removeEventListener('keydown', onHostKeydown, true);
   frame.remove();
   frame = null;
@@ -110,13 +108,20 @@ function stop() {
   stopped = true;
   observer?.disconnect();
   clearTimeout(checkTimer);
+  closeFrame();
 }
 
 // Only the extension can send these: the service worker confirms the overlay is
 // showing, closes the frame when the overlay asks, and stops this script when
 // auto-detect is turned off.
-chrome.runtime.onMessage.addListener(msg => {
-  if (msg?.type === 'OVERLAY_READY') clearTimeout(readyTimer);
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (sender?.id !== chrome.runtime.id || sender.tab) return;
+  if (msg?.type === 'OVERLAY_READY' && frame && readyTimer !== null) {
+    clearTimeout(readyTimer);
+    readyTimer = null;
+    frame.style.setProperty('pointer-events', 'auto', 'important');
+    frame.focus();
+  }
   if (msg?.type === 'CLOSE_OVERLAY') closeFrame();
   if (msg?.type === 'STOP') stop();
 });

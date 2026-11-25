@@ -38,7 +38,7 @@ It has five contexts:
 
 `lib/core.js` holds all the pure logic: detection patterns, settings normalization and allowlists, friend validation, prompt and request building, response parsing, error mapping, sender checks, and mailto helpers. It defines a global `JN` in the extension and is `require()`d by the Node tests.
 
-The API call runs in the **service worker** because some job sites set a Content Security Policy that blocks outbound `fetch` from content scripts, and because the worker is the one place that can check who asked. A port connection (`chrome.runtime.connect`) keeps the worker alive for the whole request.
+The API call runs in the **service worker**, which checks who asked and can fetch even when a job site's Content Security Policy blocks outbound requests from content scripts. The popup and overlay receive the reply over a `chrome.runtime.connect` port and show an error if the port disconnects before the reply.
 
 ---
 
@@ -56,7 +56,7 @@ The API call runs in the **service worker** because some job sites set a Content
 There are no `content_scripts` in the manifest. The service worker registers `lib/core.js` + `content.js` (id `job-notifier-detect`, all http(s) pages, top frame only) only while `autoDetect` is `true` and all-sites access is held. It re-checks on install or update, on startup, on `chrome.permissions.onAdded`/`onRemoved`, and whenever `autoDetect` changes.
 
 - **Turning it on:** the popup or settings page calls `chrome.permissions.request` for all sites from the click, then sets `autoDetect: true`. The worker also sets it when `onAdded` reports all-sites access, which covers the popup closing while Chrome's dialog is open.
-- **Turning it off:** the page sets `autoDetect: false`. The worker unregisters the script, calls `chrome.permissions.remove` (so `chrome://extensions` shows no site access), clears pending prompts, and sends `STOP` to open tabs.
+- **Turning it off** sets `autoDetect: false`. The worker unregisters the script, calls `chrome.permissions.remove`, clears pending prompts, and sends `STOP` to open tabs. Running scripts stop reading the page and remove any open overlay, restoring focus when the previous control is still present.
 - **Access removed in Chrome:** `onRemoved` sets `autoDetect: false`.
 
 The switch shows on only when `autoDetect` is `true` and the permission is held.
@@ -73,7 +73,7 @@ The switch shows on only when `autoDetect` is `true` and the permission is held.
 | `chrome.storage.local` | `autoDetect` | boolean, default `false` |
 | `chrome.storage.local` | `friends` | the friends list. Absent or `[]` on a fresh install; nothing is loaded until the user adds a friend |
 | `chrome.storage.session` | `jobs` | recently viewed postings by tab id: `{ [tabId]: { text, title, url, seenAt, hash } }`, text capped at 8,000 characters. `url` holds only the site's hostname, never the path, query, or fragment. Removed when the tab closes |
-| `chrome.storage.session` | `prompts` | the overlay state for each tab: `{ [tabId]: posting plus origin }`, where `origin` is the site that showed the confirmation. Cleared on close, when the tab loads a new page (same-document URL changes keep it), when the tab closes, and when auto-detect is turned off |
+| `chrome.storage.session` | `prompts` | the posting and confirmation origin for each tab, with browser-supplied identifiers for the top-level document and the overlay frame and document that loaded the prompt. Cleared on close, when the tab loads a new page (same-document URL changes keep it), when the tab closes, and when auto-detect is turned off |
 | `chrome.storage.session` | `prompted` | hashes of the last 100 postings already offered, so each posting is offered once |
 
 Rules:
@@ -131,13 +131,19 @@ Opening the popup never calls Claude, and nothing is focused by default, so a st
    └─ JN.recallPosting(jobs, tab): a fresh posting (≤30 minutes) from this
       tab, else from the tab that opened it (openerTabId). Never another tab.
    └─ Skips if there is none, or it was already offered (prompted)
-   └─ Otherwise stores prompts[tabId] (the posting plus this page's origin),
-      adds the hash to prompted, and replies { show: true }
+   └─ Otherwise stores prompts[tabId] (the posting, confirmation origin, and
+      top-level document ID), adds the hash to prompted, and replies { show: true }
+   └─ The worker serializes prompt reads and writes with navigation cleanup.
+      A full navigation invalidates reports still being processed for the old page.
 
 4. content.js adds a full-viewport transparent iframe with overlay.html
    └─ The frame sends OVERLAY_STATE and gets the prompt for its own tab
       (sender.tab.id): the posting's title and site, and whether a key is set
-   └─ Shows "Find friends for this job?"
+   └─ The worker records the browser-supplied overlay frame and document IDs
+      when it returns the prompt. The overlay sends OVERLAY_READY after it renders.
+   └─ The worker forwards readiness to the original top-level document.
+      Until then, the iframe leaves page clicks alone. The content script
+      focuses it on readiness or removes it after a five-second timeout.
    └─ Only a click on Find friends opens the analyze port with ANALYZE_TAB.
       It carries no job text; the worker uses the posting it recorded.
    └─ Close, Not now, Escape, or a scrim click sends OVERLAY_CLOSE. The worker
@@ -153,9 +159,11 @@ Because the posting is stored by tab id in the extension (not in the site's stor
 |---|---|---|
 | `JOB_SEEN` | content script → worker | `{ text, title }` of a page that looks like a posting |
 | `CONFIRMATION_SEEN` | content script → worker | nothing |
-| `CLOSE_OVERLAY` | worker → content script (top frame) | nothing; remove the frame |
-| `STOP` | worker → content script (top frame) | nothing; auto-detect was turned off |
+| `OVERLAY_DISMISSED` | content script → worker | data-free request to clear the prompt after a timeout or Escape in the host page |
+| `CLOSE_OVERLAY` | worker → content script (top frame) | data-free signal to remove the frame and restore focus |
+| `STOP` | worker → content script (top frame) | data-free signal to stop page reading and close the overlay |
 | `OVERLAY_STATE` | overlay → worker | nothing; the reply is this tab's prompt or `{ state: 'none' }` |
+| `OVERLAY_READY` | overlay → worker → matching content document | data-free signal that the rendered frame can accept clicks and take focus |
 | `OVERLAY_CLOSE` | overlay → worker | nothing |
 | `ANALYZE_TAB` | overlay → worker, `analyze` port | nothing; the worker uses `prompts[tabId]` |
 | `ANALYZE_JOB` | popup → worker, `analyze` port | `{ jobText }` |
@@ -164,13 +172,14 @@ Both `analyze` requests get one reply: the results, or a code for no key, no fri
 
 ### Overlay isolation
 
-The prompt and results are an extension page inside an iframe, not host-page DOM. Friend names, emails, drafts, the recruiter link, and the posting's site and title never enter the host page, and page CSS can't restyle the panel. The frame takes no data from the page: no `postMessage` input, no URL parameters, nothing from the content script. It gets its state only from the worker, and only for its own tab while that tab is still on the origin that reported the confirmation. Closing goes through the worker, and `CLOSE_OVERLAY` carries no data. The dialog has `role="dialog"` and `aria-modal="true"`, takes focus on open, closes on Escape, and returns focus to the page on close.
+The prompt and results render in an extension iframe. Friend names, emails, drafts, the recruiter link, and the posting's site and title stay inside the frame, where page CSS can't restyle the panel. The frame gets state over the extension message channel from the worker for its own tab, while the tab is still on the origin that reported the confirmation. The worker checks which frame and document loaded the prompt before honoring readiness, analysis, or close requests. The readiness and close signals carry no user data. The dialog has `role="dialog"` and `aria-modal="true"`, takes focus when ready, closes on Escape, and returns focus to the page on close.
 
 ### Sender checks
 
-Every message the worker handles goes through a pure helper in `lib/core.js`:
-- `JN.isExtensionPage(sender, runtimeId)`: `sender.id` is this extension and `sender.url` is a `chrome-extension://{id}/` page. Required for `OVERLAY_*` messages, the `analyze` port, and any reply that carries friend data. A content script never passes, because its `sender.url` is the web page. A content script that connects to the `analyze` port is disconnected.
-- `JN.isValidContentMessage(msg, sender, runtimeId)`: `JOB_SEEN` or `CONFIRMATION_SEEN`, from a tab's top frame (`frameId === 0`) on an http(s) URL, with string fields under their caps (text ≤ `MAX_JOB_TEXT`, title ≤ 200). Anything else is ignored, and so is every content message while auto-detect is off.
+Every message the worker handles goes through a pure helper in `lib/core.js`.
+
+- `JN.isExtensionPage(sender, runtimeId)` requires Chrome's `sender.id` to match this extension and `sender.url` to use the `chrome-extension:` scheme. This supports the dynamically assigned overlay origin. It applies to overlay page messages and the `analyze` port. A content script that connects to the port is disconnected because its sender URL belongs to the web page.
+- `JN.isValidContentMessage(msg, sender, runtimeId)` accepts `JOB_SEEN`, `CONFIRMATION_SEEN`, and `OVERLAY_DISMISSED` from this extension's content script in a tab's top frame (`frameId === 0`) on an http(s) URL, with string fields under their caps (text ≤ `MAX_JOB_TEXT`, title ≤ 200). With auto-detect off, only dismissal is accepted.
 
 ### Detection patterns
 
@@ -194,6 +203,8 @@ See `JOB_SIGNALS` and `CONFIRMATION_PATTERNS` in `lib/core.js`. Add a phrase the
 ### Errors
 
 `JN.describeApiError(status, body)` maps API failures to `{ title, body, action }` in plain language: invalid key (401), out of credit (400 mentioning the credit balance), no permission (403), rate limit (429), overloaded or server error (529, 5xx), unknown model (404, or a 400 naming the model), and no network (fetch threw). Only an unrecognized status shows the API's own message, with anything shaped like a key redacted.
+
+The worker sets a 25-second request deadline ahead of Chrome's service worker fetch response limit. The overlay retains its 90-second fallback for a port that stops returning replies. Both surfaces handle a disconnected port. [Chrome service worker lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle/#idle-shutdown)
 
 ---
 

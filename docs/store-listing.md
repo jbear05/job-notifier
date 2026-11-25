@@ -7,7 +7,7 @@ Requirements checked on 2026-11-25 against developer.chrome.com: [store listing]
 ## Before you submit
 
 - [ ] Recapture `docs/assets/screenshot-2-popup.png` by hand in real Chrome: the whole browser window with the toolbar, so the popup is visibly attached to it. 1280x800, PNG without alpha.
-- [ ] Check that `docs/assets/screenshot-4-prompt.png` exists.
+- [x] Check that `docs/assets/screenshot-4-prompt.png` exists.
 - [ ] On the Privacy practices tab, match the data-type checkboxes and certification wording to the Data usage section below. The public docs don't list them, so they couldn't be checked word for word.
 - [ ] Pick the subcategory under Productivity (Communication suggested). The public docs don't list the subcategories.
 

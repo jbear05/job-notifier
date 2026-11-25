@@ -8,7 +8,11 @@ importScripts('lib/core.js');
 
 const SITES = { origins: JN.ALL_SITES };
 const SCRIPT_ID = 'job-notifier-detect';
-const API_TIMEOUT_MS = 80000;
+const API_TIMEOUT_MS = 25000;
+const API_TIMEOUT_ERROR = {
+  ...JN.ERRORS.timeout,
+  body: `There was no response after ${API_TIMEOUT_MS / 1000} seconds. Try again.`,
+};
 
 // ── Settings & friends (set on the settings page) ──
 
@@ -51,6 +55,7 @@ async function applyAutoDetect() {
     ]);
   }
   if (on || (!scripts.length && !access)) return;
+  contentDocuments.clear();
   if (scripts.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
   if (access) await chrome.permissions.remove(SITES);
   await inSession(() => chrome.storage.session.remove('prompts'));
@@ -67,7 +72,9 @@ chrome.permissions.onAdded.addListener(async () => {
 });
 chrome.permissions.onRemoved.addListener(() => syncAutoDetect());
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && 'autoDetect' in changes) syncAutoDetect();
+  if (area !== 'local' || !('autoDetect' in changes)) return;
+  if (changes.autoDetect.newValue !== true) contentDocuments.clear();
+  syncAutoDetect();
 });
 chrome.runtime.onStartup.addListener(() => syncAutoDetect());
 chrome.runtime.onInstalled.addListener(details => {
@@ -85,49 +92,59 @@ function originOf(url) {
   }
 }
 
-// Every read-modify-write of the session maps runs here, one at a time, so
-// messages from several tabs at once can't overwrite each other's entries.
-let sessionWrites = Promise.resolve();
+// Serialize session map changes and prompt lookups so tabs don't overwrite
+// each other's entries or retrieve a prompt while its deletion is queued.
+let sessionOperations = Promise.resolve();
+// Tokens distinguish an in-flight content message from one sent after a full navigation.
+const contentDocuments = new Map();
+
+function currentDocument(tabId) {
+  if (!contentDocuments.has(tabId)) contentDocuments.set(tabId, Symbol());
+  const token = contentDocuments.get(tabId);
+  return () => contentDocuments.get(tabId) === token;
+}
 
 function inSession(step) {
-  const run = sessionWrites.then(step);
-  sessionWrites = run.catch(() => {});
+  const run = sessionOperations.then(step);
+  sessionOperations = run.catch(() => {});
   return run;
 }
 
-// Only the posting's origin is kept as `url`, never its path, query, or fragment.
-function rememberJob(sender, msg) {
+// Only the posting's hostname is kept as `url`.
+function rememberJob(sender, msg, isCurrent) {
   return inSession(async () => {
     const { jobs = {} } = await chrome.storage.session.get('jobs');
-    jobs[sender.tab.id] = { text: msg.text, title: msg.title || '', url: originOf(sender.url), seenAt: Date.now(), hash: JN.hashText(msg.text) };
+    if (!isCurrent()) return;
+    jobs[sender.tab.id] = { text: msg.text, title: msg.title || '', url: new URL(sender.url).hostname, seenAt: Date.now(), hash: JN.hashText(msg.text) };
     await chrome.storage.session.set({ jobs });
   });
 }
 
 // A confirmation page in `tab` can offer a posting from the same tab or its
 // opener tab (Decision 13), once per posting. Resolves to whether to show the prompt.
-function offerPrompt(sender) {
+function offerPrompt(sender, isCurrent) {
   return inSession(async () => {
     const { jobs = {}, prompts = {}, prompted = [] } = await chrome.storage.session.get(['jobs', 'prompts', 'prompted']);
+    if (!isCurrent()) return false;
     const posting = JN.recallPosting(jobs, sender.tab);
     if (!posting || prompted.includes(posting.hash)) return false;
-    prompts[sender.tab.id] = { ...posting, origin: originOf(sender.url) };
+    prompts[sender.tab.id] = { ...posting, origin: originOf(sender.url), contentDocumentId: sender.documentId };
     await chrome.storage.session.set({ prompts, prompted: [...prompted, posting.hash].slice(-100) });
-    return true;
+    return isCurrent();
   });
 }
 
-// The prompt for a tab, only while the tab is still on the site that showed the confirmation.
-async function getPrompt(tab) {
-  const { prompts = {} } = await chrome.storage.session.get('prompts');
+// Read inside the session queue, after any navigation cleanup already enqueued.
+function readPrompt(prompts, tab) {
   const prompt = prompts[tab.id];
   return prompt && prompt.origin === originOf(tab.url) ? prompt : null;
 }
 
-function dropPrompt(tabId) {
+function dropPrompt(tabId, contentDocumentId) {
   return inSession(async () => {
     const { prompts = {} } = await chrome.storage.session.get('prompts');
-    if (!prompts[tabId]) return;
+    const prompt = prompts[tabId];
+    if (!prompt || (contentDocumentId && contentDocumentId !== prompt.contentDocumentId)) return;
     delete prompts[tabId];
     await chrome.storage.session.set({ prompts });
   });
@@ -136,16 +153,21 @@ function dropPrompt(tabId) {
 // A full navigation or reload clears the tab's prompt (criterion 31). Same-document
 // URL changes (single-page apps) arrive without status 'loading' and keep it.
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.status === 'loading') dropPrompt(tabId);
+  if (info.status !== 'loading') return;
+  contentDocuments.delete(tabId);
+  dropPrompt(tabId);
 });
 
-chrome.tabs.onRemoved.addListener(tabId => inSession(async () => {
-  const { jobs = {}, prompts = {} } = await chrome.storage.session.get(['jobs', 'prompts']);
-  if (!jobs[tabId] && !prompts[tabId]) return;
-  delete jobs[tabId];
-  delete prompts[tabId];
-  await chrome.storage.session.set({ jobs, prompts });
-}));
+chrome.tabs.onRemoved.addListener(tabId => {
+  contentDocuments.delete(tabId);
+  return inSession(async () => {
+    const { jobs = {}, prompts = {} } = await chrome.storage.session.get(['jobs', 'prompts']);
+    if (!jobs[tabId] && !prompts[tabId]) return;
+    delete jobs[tabId];
+    delete prompts[tabId];
+    await chrome.storage.session.set({ jobs, prompts });
+  });
+});
 
 // ── Claude ──
 
@@ -158,15 +180,15 @@ async function analyze(jobText) {
   if (status !== 'ok') return { ok: false, code: 'NO_FRIENDS', friends: status };
 
   const req = JN.buildRequest(jobText, friends, settings);
-  // Gives up before the overlay's own 90 s timer, so "Try again" starts a fresh
-  // request instead of waiting on a hung one.
+  // Finish before Chrome's 30 s service worker fetch-response deadline. The
+  // extension pages handle port disconnects if Chrome still stops the worker.
   const signal = AbortSignal.timeout(API_TIMEOUT_MS);
   const timedOut = e => e?.name === 'TimeoutError';
   let response;
   try {
     response = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal });
   } catch (e) {
-    return { ok: false, error: timedOut(e) ? JN.ERRORS.timeout : JN.describeApiError(0) };
+    return { ok: false, error: timedOut(e) ? API_TIMEOUT_ERROR : JN.describeApiError(0) };
   }
   if (!response.ok) {
     return { ok: false, error: JN.describeApiError(response.status, await response.json().catch(() => null)) };
@@ -175,7 +197,7 @@ async function analyze(jobText) {
     // threshold (normalized, 0-1) lets the overlay name it without reading storage.
     return { ok: true, result: JN.parseResponse(await response.json(), friends, settings.threshold), threshold: settings.threshold };
   } catch (e) {
-    return { ok: false, error: timedOut(e) ? JN.ERRORS.timeout : JN.ERRORS[e.code] || JN.ERRORS.incomplete };
+    return { ok: false, error: timedOut(e) ? API_TIMEOUT_ERROR : JN.ERRORS[e.code] || JN.ERRORS.incomplete };
   }
 }
 
@@ -195,37 +217,64 @@ async function onContentMessage(msg, sender) {
   // The host page closed the frame (Escape, or the overlay never confirmed).
   // Closing is always safe, so this needs no auto-detect check.
   if (msg.type === 'OVERLAY_DISMISSED') {
-    await dropPrompt(sender.tab.id);
+    await dropPrompt(sender.tab.id, sender.documentId);
     return { ok: true };
   }
+  const isCurrent = currentDocument(sender.tab.id);
   if (!(await getSettings()).autoDetect) return { off: true };
   if (msg.type === 'JOB_SEEN') {
-    await rememberJob(sender, msg);
+    await rememberJob(sender, msg, isCurrent);
     return { ok: true };
   }
-  return { show: await offerPrompt(sender) };
+  return { show: await offerPrompt(sender, isCurrent) };
 }
 
-// Messages from the overlay page, framed in a tab by the content script.
-async function onOverlayMessage(msg, tab) {
-  if (msg.type === 'OVERLAY_STATE') {
-    const prompt = await getPrompt(tab);
-    if (!prompt) return { state: 'none' };
-    // Tells the content script the frame is working, so it keeps it (fail-safe in content.js).
-    chrome.tabs.sendMessage(tab.id, { type: 'OVERLAY_READY' }, { frameId: 0 }).catch(() => {});
-    return { state: 'prompt', posting: JN.postingLabel(prompt), hasKey: !!(await getSettings()).apiKey };
-  }
-  await dropPrompt(tab.id);
-  chrome.tabs.sendMessage(tab.id, { type: 'CLOSE_OVERLAY' }, { frameId: 0 }).catch(() => {});
-  return { ok: true };
+function isOverlayFrame(sender) {
+  return sender.tab && sender.frameId > 0 && /^chrome-extension:\/\/[^/]+\/overlay\.html$/.test(sender.url) &&
+    (!sender.documentLifecycle || sender.documentLifecycle === 'active');
+}
+
+function ownsPrompt(prompt, sender) {
+  return prompt && prompt.overlayFrameId === sender.frameId && prompt.overlayDocumentId === sender.documentId;
+}
+
+// The first overlay that loads state for the prompt owns readiness, analysis
+// and closing. Browser-supplied IDs survive service worker restarts in session storage.
+function onOverlayMessage(msg, sender) {
+  const { tab } = sender;
+  const isCurrent = currentDocument(tab.id);
+  return inSession(async () => {
+    const { prompts = {} } = await chrome.storage.session.get('prompts');
+    const prompt = isCurrent() ? readPrompt(prompts, tab) : null;
+    if (msg.type === 'OVERLAY_STATE') {
+      if (!prompt || (prompt.overlayFrameId && !ownsPrompt(prompt, sender))) return { state: 'none' };
+      const settings = await getSettings();
+      if (!settings.autoDetect || !isCurrent()) return { state: 'none' };
+      prompt.overlayFrameId = sender.frameId;
+      prompt.overlayDocumentId = sender.documentId;
+      await chrome.storage.session.set({ prompts });
+      if (!isCurrent()) return { state: 'none' };
+      return { state: 'prompt', posting: JN.postingLabel(prompt), hasKey: !!settings.apiKey };
+    }
+    if (!ownsPrompt(prompt, sender)) return { ok: false };
+    const target = prompt.contentDocumentId ? { documentId: prompt.contentDocumentId } : { frameId: 0 };
+    if (msg.type === 'OVERLAY_READY') {
+      await chrome.tabs.sendMessage(tab.id, { type: 'OVERLAY_READY' }, target).catch(() => {});
+    } else {
+      delete prompts[tab.id];
+      await chrome.storage.session.set({ prompts });
+      await chrome.tabs.sendMessage(tab.id, { type: 'CLOSE_OVERLAY' }, target).catch(() => {});
+    }
+    return { ok: true };
+  });
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   let reply;
   if (JN.isValidContentMessage(msg, sender, chrome.runtime.id)) {
     reply = onContentMessage(msg, sender);
-  } else if (JN.isExtensionPage(sender, chrome.runtime.id) && sender.tab && ['OVERLAY_STATE', 'OVERLAY_CLOSE'].includes(msg?.type)) {
-    reply = onOverlayMessage(msg, sender.tab);
+  } else if (JN.isExtensionPage(sender, chrome.runtime.id) && isOverlayFrame(sender) && ['OVERLAY_STATE', 'OVERLAY_READY', 'OVERLAY_CLOSE'].includes(msg?.type)) {
+    reply = onOverlayMessage(msg, sender);
   } else {
     return false;
   }
@@ -233,7 +282,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true;
 });
 
-// A long-lived port keeps the service worker alive for the whole API call.
+// The port returns the analysis result or notifies the caller if the worker restarts.
 // Popup: { type: 'ANALYZE_JOB', jobText }. Overlay: { type: 'ANALYZE_TAB' },
 // which carries no text; the worker uses the posting it recorded for that tab.
 chrome.runtime.onConnect.addListener(port => {
@@ -247,8 +296,15 @@ chrome.runtime.onConnect.addListener(port => {
     let reply;
     if (msg?.type === 'ANALYZE_JOB' && typeof msg.jobText === 'string') {
       reply = await analyzeOnce(sender.tab ? `tab:${sender.tab.id}` : `page:${sender.documentId || sender.url}`, msg.jobText);
-    } else if (msg?.type === 'ANALYZE_TAB' && sender.tab) {
-      const prompt = await getPrompt(sender.tab);
+    } else if (msg?.type === 'ANALYZE_TAB' && isOverlayFrame(sender)) {
+      const isCurrent = currentDocument(sender.tab.id);
+      const prompt = await inSession(async () => {
+        const { prompts = {} } = await chrome.storage.session.get('prompts');
+        const current = readPrompt(prompts, sender.tab);
+        if (!isCurrent() || !ownsPrompt(current, sender)) return null;
+        const { autoDetect } = await getSettings();
+        return autoDetect && isCurrent() ? current : null;
+      });
       reply = prompt ? await analyzeOnce(`tab:${sender.tab.id}`, prompt.text) : { ok: false, code: 'NO_POSTING' };
     } else {
       return;
