@@ -9,11 +9,8 @@ async function load() {
   $("threshold").value = s.threshold;
   $("auto-detect").checked = data.autoDetect !== false;
 
-  let friends = data.friends;
-  if (!Array.isArray(friends)) {
-    // First run: start from the bundled example so the format is obvious.
-    friends = await fetch(chrome.runtime.getURL("friends.json")).then(r => r.json()).catch(() => []);
-  }
+  // First run: no friends until the user adds one (criterion 2).
+  const friends = Array.isArray(data.friends) ? data.friends : [];
   $("friends").value = JSON.stringify(friends, null, 2);
 }
 

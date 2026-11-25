@@ -33,15 +33,26 @@ async function init() {
     return;
   }
 
-  chrome.tabs.sendMessage(tab.id, { type: "GET_PAGE_TEXT" }, response => {
-    if (chrome.runtime.lastError || !response) {
-      showInput("Couldn't read this page. Paste the job posting text below:");
-    } else if (response.isJobPage) {
-      showInput("Found a job posting on this page. Check the text, then find matches:", response.text);
-    } else {
-      showInput("This doesn't look like a job posting. Paste the job text below:");
-    }
-  });
+  // activeTab lets the popup read the tab it was opened on, including tabs
+  // that were open before the extension was installed (criterion 5).
+  if (!/^https?:/.test(tab?.url || "")) {
+    showInput("Chrome doesn't let extensions read this page. Paste the posting text below.");
+    return;
+  }
+  let text;
+  try {
+    const target = { tabId: tab.id };
+    await chrome.scripting.executeScript({ target, files: ["lib/core.js"] });
+    [{ result: text }] = await chrome.scripting.executeScript({ target, func: () => JN.extractJobText(document) });
+  } catch (e) {
+    showInput("Couldn't read this page. Reload it and open Job Notifier again, or paste the posting text below.");
+    return;
+  }
+  if (JN.isJobPage(text)) {
+    showInput("Found a job posting on this page. Check the text, then find matches:", text);
+  } else {
+    showInput("This doesn't look like a job posting. Paste the job text below:");
+  }
 }
 
 async function onAnalyzeClick() {
@@ -72,7 +83,10 @@ function analyzeViaBackground(jobText) {
     port.onMessage.addListener(msg => {
       done = true;
       port.disconnect();
-      msg.ok ? resolve(msg.result) : reject(new Error(msg.error || "Analysis failed."));
+      if (msg.ok) return resolve(msg.result);
+      // Reply shape: { code: 'NO_API_KEY' | 'NO_FRIENDS' } or { error: { title, body, action } }.
+      const err = msg.error ? `${msg.error.title}. ${msg.error.body}` : msg.code === "NO_FRIENDS" ? "Add a friend in settings first." : msg.code;
+      reject(new Error(err || "Analysis failed."));
     });
     port.onDisconnect.addListener(() => {
       if (!done) reject(new Error("Connection closed unexpectedly."));

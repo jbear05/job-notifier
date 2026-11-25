@@ -2,37 +2,66 @@
 
 ## Architecture
 
-The extension is built on Chrome Manifest V3 and has four contexts:
+Job Notifier is a Chrome Manifest V3 extension with no backend. Each user brings their own Anthropic API key, and the service worker calls `https://api.anthropic.com` directly with it. Nothing goes to a developer server, because there isn't one.
+
+It has five contexts:
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Any web page                                        │
-│  ┌──────────────────────────────────────────────┐   │
-│  │ lib/core.js + content.js (content scripts)   │   │
-│  │  - Reads visible text locally                │   │
-│  │  - Reports job postings to the background    │   │
-│  │  - Spots confirmation messages               │   │
-│  │  - Renders the overlay UI                    │   │
-│  └──────────────┬───────────────────────────────┘   │
-└─────────────────┼────────────────────────────────────┘
-                  │ JOB_SEEN message / "analyze" port
-┌─────────────────▼────────────────────────────────────┐
-│  background.js (service worker)                      │
-│  - Remembers recent postings per tab (storage.session)│
-│  - Dedupes: each posting analyzed at most once       │
-│  - Only place that calls the Anthropic API           │
-└──────────────────────────────────────────────────────┘
-┌──────────────────────────┐ ┌─────────────────────────┐
-│ popup.html / popup.js    │ │ options.html / options.js│
-│ - Manual analysis        │ │ - API key, model, effort │
-│ - Auto-detect toggle     │ │ - Match threshold        │
-│                          │ │ - Friends list editor    │
-└──────────────────────────┘ └─────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  A web page (only while auto-detect is on)               │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ lib/core.js + content.js (registered at runtime)   │  │
+│  │  - Reads visible text locally                      │  │
+│  │  - Reports postings and confirmations              │  │
+│  │  - Adds the overlay iframe; renders no HTML itself │  │
+│  └──────────────┬─────────────────────────────────────┘  │
+│  ┌──────────────┼─────────────────────────────────────┐  │
+│  │ overlay.html │ (extension page in an iframe)       │  │
+│  │  - Prompt, loading, results, errors                │  │
+│  └──────────────┼─────────────────────────────────────┘  │
+└─────────────────┼────────────────────────────────────────┘
+                  │ runtime messages (sender-checked)
+┌─────────────────▼────────────────────────────────────────┐
+│  background.js (service worker)                          │
+│  - Remembers recent postings per tab (storage.session)   │
+│  - Registers/unregisters the content script              │
+│  - Only place that calls the Anthropic API               │
+└──────────────────────────────────────────────────────────┘
+┌──────────────────────────┐ ┌────────────────────────────┐
+│ popup.html / popup.js    │ │ options.html / options.js  │
+│ - Reads the active tab   │ │ - API key, model, effort,  │
+│   (activeTab+scripting)  │ │   threshold                │
+│ - Manual analysis        │ │ - Friends form, import,    │
+│ - Auto-detect switch     │ │   export                   │
+└──────────────────────────┘ └────────────────────────────┘
 ```
 
-`lib/core.js` holds all the pure logic (detection patterns, prompt and request building, response parsing, mailto helpers). It defines a global `JN` in the extension and is `require()`d by the Node tests.
+`lib/core.js` holds all the pure logic: detection patterns, settings normalization and allowlists, friend validation, prompt and request building, response parsing, error mapping, sender checks, and mailto helpers. It defines a global `JN` in the extension and is `require()`d by the Node tests.
 
-The API call runs in the **background service worker** because some job sites set a Content Security Policy that blocks outbound `fetch` from content scripts. The popup also goes through the background so there is one code path. A **port connection** (`chrome.runtime.connect`) keeps the service worker alive for the whole request.
+The API call runs in the **service worker** because some job sites set a Content Security Policy that blocks outbound `fetch` from content scripts, and because the worker is the one place that can check who asked. A port connection (`chrome.runtime.connect`) keeps the worker alive for the whole request.
+
+---
+
+## Permissions and site access
+
+| Manifest entry | Used for |
+|---|---|
+| `activeTab` + `scripting` | The popup reads the tab it was opened on with `chrome.scripting.executeScript`. This works on tabs that were open before install, and needs no all-sites access. |
+| `scripting` | `chrome.scripting.registerContentScripts` / `unregisterContentScripts` for auto-detect. |
+| `storage` | `chrome.storage.local` and `chrome.storage.session` (see Storage). |
+| `clipboardWrite` | The copy fallback when the Clipboard API isn't available. |
+| `host_permissions: https://api.anthropic.com/*` | The Messages API call from the service worker. |
+| `optional_host_permissions: https://*/*, http://*/*` | Requested only when the user turns auto-detect on. |
+
+There are no `content_scripts` in the manifest. The service worker registers `lib/core.js` + `content.js` (id `job-notifier-detect`, all http(s) pages, top frame only) only while `autoDetect` is `true` and all-sites access is held. It re-checks on install or update, on startup, on `chrome.permissions.onAdded`/`onRemoved`, and whenever `autoDetect` changes.
+
+- **Turning it on:** the popup or settings page calls `chrome.permissions.request` for all sites from the click, then sets `autoDetect: true`. The worker also sets it when `onAdded` reports all-sites access, which covers the popup closing while Chrome's dialog is open.
+- **Turning it off:** the page sets `autoDetect: false`. The worker unregisters the script, calls `chrome.permissions.remove` (so `chrome://extensions` shows no site access), clears pending prompts, and sends `STOP` to open tabs.
+- **Access removed in Chrome:** `onRemoved` sets `autoDetect: false`.
+
+The switch shows on only when `autoDetect` is `true` and the permission is held.
+
+`web_accessible_resources` lists only the overlay HTML page, with `use_dynamic_url: true`, so a site can't probe a fixed URL to learn the extension is installed. There are no `onMessageExternal`/`onConnectExternal` listeners and no `externally_connectable`, so web pages and other extensions have no channel to the worker. The CSP is `script-src 'self'; object-src 'self'`, and fonts, icons, and scripts are all bundled.
 
 ---
 
@@ -40,49 +69,108 @@ The API call runs in the **background service worker** because some job sites se
 
 | Where | Key | Contents |
 |-------|-----|----------|
-| `chrome.storage.local` | `settings` | `{ apiKey, model, effort, threshold }` |
-| `chrome.storage.local` | `autoDetect` | boolean, default `true` |
-| `chrome.storage.local` | `friends` | the friends list; until saved, `friends.json` (an example) is used |
-| `chrome.storage.session` | `jobs`, `lastJob` | recently viewed postings, per tab id; memory only, cleared when the browser closes |
-| `chrome.storage.session` | `analyzed` | hashes of the last 100 postings already analyzed |
+| `chrome.storage.local` | `settings` | `{ apiKey, model, effort, threshold }`. Read through `JN.normalizeSettings`, so a model or effort outside the allowlists falls back to the default and the threshold is clamped to 0–1 |
+| `chrome.storage.local` | `autoDetect` | boolean, default `false` |
+| `chrome.storage.local` | `friends` | the friends list. Absent or `[]` on a fresh install; nothing is loaded until the user adds a friend |
+| `chrome.storage.session` | `jobs` | recently viewed postings by tab id: `{ [tabId]: { text, title, url, seenAt, hash } }`, text capped at 8,000 characters. Removed when the tab closes |
+| `chrome.storage.session` | `prompts` | the overlay state for each tab: `{ [tabId]: posting plus origin }`, where `origin` is the site that showed the confirmation. Cleared on close, when the tab moves to another origin, when the tab closes, and when auto-detect is turned off |
+| `chrome.storage.session` | `prompted` | hashes of the last 100 postings already offered, so each posting is offered once |
 
-Web pages cannot read any of these. Nothing is written to the site's own `localStorage`/`sessionStorage`.
+Rules:
+- The key, settings, and friends live only in `chrome.storage.local`, never `storage.sync`.
+- Postings and prompt state live only in `chrome.storage.session`, at its default trusted-contexts access level (no `setAccessLevel`), so content scripts can't read them. Session storage is memory only and is cleared when the browser closes.
+- Analysis results (job summary, scores, drafts) are never stored. They exist only in the open popup or overlay page.
+- Content scripts never call `chrome.storage`. They send messages to the worker instead.
+- The API key is stored unencrypted. It never appears in a message to a content script or the overlay, in an error message, in the friends export, or in console output. The settings page shows it in a password field.
+- No runtime file logs anything (no `console.` calls).
+
+Web pages can't read any of this, and nothing is written to the site's own `localStorage`/`sessionStorage`.
 
 ### Friends schema
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Required. Display name |
-| `contact` | string | Email used for `mailto:` links. Never sent to Claude |
-| `skills` | string[] | Technical skills to match against job requirements |
-| `interests` | string[] | Industry/domain interests |
-| `level` | string | e.g. `"internship"`, `"new grad"`, `"mid"`, `"senior"` |
-| `notify` | boolean | Set to `false` to exclude without deleting |
+| `name` | string | Required. Display name, up to 100 characters |
+| `contact` | string | Email address used for `mailto:` links, or `""`. Up to 254 characters. Never sent to Claude |
+| `skills` | string[] | Technical skills. Up to 50 items of 100 characters |
+| `interests` | string[] | Industry or domain interests. Up to 50 items of 100 characters |
+| `level` | string | e.g. `"internship"`, `"new grad"`, `"senior"`. Up to 50 characters |
+| `notify` | boolean | `false` excludes the friend from matching without removing them. Default `true` |
+
+`JN.cleanFriends()` is the one validator for the settings form, JSON import, and stored friends before they reach the prompt. It builds new objects with only these six keys (so `__proto__`, `constructor`, and anything else are dropped), trims and caps strings, and rejects more than 500 entries. `JN.parseFriendsImport()` also rejects files over 1 MB and invalid JSON. A rejected import leaves the saved list unchanged. Export writes only the friends array.
+
+---
+
+## Reading a page from the popup
+
+1. The popup calls `chrome.scripting.executeScript` on the active tab (allowed by `activeTab`): it injects `lib/core.js`, then runs `JN.extractJobText(document)` to read the visible text.
+2. If the text looks like a posting (`JN.isJobPage`), it fills the "Posting text" box. Otherwise the user pastes the posting. Chrome-restricted pages (`chrome://`, the Web Store, the PDF viewer) and failed reads get their own messages.
+3. **Find friends** sends `ANALYZE_JOB` with the text over the `analyze` port. The worker caps it at `JN.MAX_JOB_TEXT` (8,000) characters. Repeat clicks while a request is running share that request.
+
+Opening the popup never calls Claude, and nothing is focused by default, so a stray Enter can't start a paid request.
 
 ---
 
 ## Auto-detection flow
 
 ```
-1. You view a job posting
+1. You view a job posting (auto-detect on)
    └─ content.js reads the visible text of <main>/<article> (or <body>)
-   └─ If ≥3 job signals match, sends JOB_SEEN to the background
-   └─ background stores it under this tab's id (and as lastJob)
+   └─ If ≥3 job signals match, sends JOB_SEEN { text, title }
+   └─ The worker checks the sender and fields (JN.isValidContentMessage)
+      and stores the posting under this tab's id
 
 2. You submit the application; a confirmation appears
    └─ content.js checks *rendered* headings, dialogs, alerts, live regions,
       and <main> (≤3000 chars each) for a confirmation phrase
-   └─ Opens the "analyze" port and sends AUTO_ANALYZE
+   └─ Sends CONFIRMATION_SEEN (no fields). This message never starts a
+      Claude call. The reply is { show }, or { off: true } when auto-detect
+      is off, which stops the script.
 
 3. background.js
-   └─ Skips silently if auto-detect is off, no posting was seen in the last
-      30 minutes (this tab first, then any tab), or the posting was already analyzed
-   └─ Otherwise replies { started }, calls Claude, replies with the result
+   └─ JN.recallPosting(jobs, tab): a fresh posting (≤30 minutes) from this
+      tab, else from the tab that opened it (openerTabId). Never another tab.
+   └─ Skips if there is none, or it was already offered (prompted)
+   └─ Otherwise stores prompts[tabId] (the posting plus this page's origin),
+      adds the hash to prompted, and replies { show: true }
 
-4. content.js shows the overlay only after { started }, then renders matches
+4. content.js adds a full-viewport transparent iframe with overlay.html
+   └─ The frame sends OVERLAY_STATE and gets the prompt for its own tab
+      (sender.tab.id): the posting's title and site, and whether a key is set
+   └─ Shows "Find friends for this job?"
+   └─ Only a click on Find friends opens the analyze port with ANALYZE_TAB.
+      It carries no job text; the worker uses the posting it recorded.
+   └─ Close, Not now, Escape, or a scrim click sends OVERLAY_CLOSE. The worker
+      clears prompts[tabId] and sends CLOSE_OVERLAY to the content script,
+      which removes the frame and returns focus to the page.
 ```
 
-Because the posting is stored by tab id in the extension (not in the site's storage), it survives cross-site hops such as LinkedIn → Workday. Hidden elements are ignored, so pre-rendered "Thank you for applying" templates don't fire.
+Because the posting is stored by tab id in the extension (not in the site's storage), it survives same-tab cross-site hops such as LinkedIn → Workday, and "opens in a new tab" flows through `openerTabId`. Hidden elements are ignored, so pre-rendered "Thank you for applying" templates don't fire.
+
+### Messages
+
+| Message | From → to | Carries |
+|---|---|---|
+| `JOB_SEEN` | content script → worker | `{ text, title }` of a page that looks like a posting |
+| `CONFIRMATION_SEEN` | content script → worker | nothing |
+| `CLOSE_OVERLAY` | worker → content script (top frame) | nothing; remove the frame |
+| `STOP` | worker → content script (top frame) | nothing; auto-detect was turned off |
+| `OVERLAY_STATE` | overlay → worker | nothing; the reply is this tab's prompt or `{ state: 'none' }` |
+| `OVERLAY_CLOSE` | overlay → worker | nothing |
+| `ANALYZE_TAB` | overlay → worker, `analyze` port | nothing; the worker uses `prompts[tabId]` |
+| `ANALYZE_JOB` | popup → worker, `analyze` port | `{ jobText }` |
+
+Both `analyze` requests get one reply: the results, or a code for no key, no friends, or no posting, or a mapped error (see Errors).
+
+### Overlay isolation
+
+The prompt and results are an extension page inside an iframe, not host-page DOM. Friend names, emails, drafts, the recruiter link, and the posting's site and title never enter the host page, and page CSS can't restyle the panel. The frame takes no data from the page: no `postMessage` input, no URL parameters, nothing from the content script. It gets its state only from the worker, and only for its own tab while that tab is still on the origin that reported the confirmation. Closing goes through the worker, and `CLOSE_OVERLAY` carries no data. The dialog has `role="dialog"` and `aria-modal="true"`, takes focus on open, closes on Escape, and returns focus to the page on close.
+
+### Sender checks
+
+Every message the worker handles goes through a pure helper in `lib/core.js`:
+- `JN.isExtensionPage(sender, runtimeId)`: `sender.id` is this extension and `sender.url` is a `chrome-extension://{id}/` page. Required for `OVERLAY_*` messages, the `analyze` port, and any reply that carries friend data. A content script never passes, because its `sender.url` is the web page. A content script that connects to the `analyze` port is disconnected.
+- `JN.isValidContentMessage(msg, sender, runtimeId)`: `JOB_SEEN` or `CONFIRMATION_SEEN`, from a tab's top frame (`frameId === 0`) on an http(s) URL, with string fields under their caps (text ≤ `MAX_JOB_TEXT`, title ≤ 200). Anything else is ignored, and so is every content message while auto-detect is off.
 
 ### Detection patterns
 
@@ -94,18 +182,28 @@ See `JOB_SIGNALS` and `CONFIRMATION_PATTERNS` in `lib/core.js`. Add a phrase the
 
 `JN.buildRequest()` sends one request to `POST /v1/messages`:
 
-- **Model** from settings (default `claude-opus-5-5`) with `output_config.effort` (default `low`, to keep cost down).
-- **Structured output**: `output_config.format` with a JSON schema, so the response is always valid JSON.
-- **Refusal fallback**: on models that support it, `fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta header.
-- Friends are sent as `{ id, name, skills, interests, level }`. Claude returns matches by `id`, which are mapped back to the local list to attach contact emails.
+- **Model and effort** come from allowlists through `JN.normalizeSettings`. `JN.MODELS` is `claude-haiku-5-5` (Claude Haiku 5.5, the default), `claude-sonnet-5-5`, and `claude-opus-5-5`. `JN.EFFORTS` is `low` (default), `medium`, and `high`. A stored model or effort outside these falls back to the default. `max_tokens` is fixed at 4096.
+- **System prompt** holds all instructions. It says the posting and friend fields are untrusted content, that any instructions inside them must be ignored, and that drafts must not contain links or contact details.
+- **User message** holds the friends (`{ id, name, skills, interests, level }`, after `cleanFriends`) inside `<friends>` and the posting text (capped at 8,000 characters) inside `<job_posting>`. Those tags are stripped from page text first, so a page can't close the delimiter.
+- **Structured output**: `output_config.format` with a JSON schema.
+- **Refusal fallback**: on models that support it (Sonnet 5.5 and Opus 5.5, not Haiku 5.5), `fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta header.
+- The request goes from the service worker with the `anthropic-dangerous-direct-browser-access` header. That's acceptable here because the key belongs to the person using this browser.
 
-`JN.parseResponse()` handles `refusal` and `max_tokens` stop reasons, drops unknown or duplicate ids and below-threshold scores, and sorts by score.
+`JN.parseResponse()` treats Claude's output as untrusted. It handles `refusal` and `max_tokens` stop reasons, coerces job fields to their types and caps their length, requires a finite score and clamps it to 0–1, caps messages at 2,000 characters, drops unknown, duplicate, or non-integer ids and below-threshold scores, takes `contact` only from the stored friend, and sorts by score.
+
+### Errors
+
+`JN.describeApiError(status, body)` maps API failures to `{ title, body, action }` in plain language: invalid key (401), out of credit (400 mentioning the credit balance), no permission (403), rate limit (429), overloaded or server error (529, 5xx), unknown model (404, or a 400 naming the model), and no network (fetch threw). Only an unrecognized status shows the API's own message, with anything shaped like a key redacted.
 
 ---
 
 ## Sending
 
-`mailto:` links open your email client; you still press Send there. Browsers only allow one new window per click, so **Open next email** opens one checked email per click and counts down. **Copy all** copies every checked message as one block.
+`mailto:` links open the user's email client; they still press Send there. `JN.mailtoUrl()` takes the recipient only from the stored friend's `contact` and URL-encodes the subject and body, so page text or Claude's output can't add recipients or headers.
+
+Browsers only allow one new window per click, so **Open next email** opens one checked email per click and counts down. **Copy all** copies every checked message as one block. If a clipboard write fails, the button says so instead of "Copied".
+
+A draft that contains a URL or email address (`JN.draftHasLinkOrEmail`) shows a note on its card telling the user to check it before sending. The note updates as the draft is edited.
 
 ### Recruiter contact (optional)
 
@@ -117,8 +215,15 @@ When there are matches, the share step asks "Do you have a recruiter contact for
 
 ---
 
+## Packaging
+
+`npm run package` (with `--script-shell=bash` on Windows) runs `git archive --format=zip` on `HEAD` and writes `dist/job-notifier-<version>.zip`. It packages committed files only. `.gitattributes` marks tests, docs, CI, Claude tooling, README, PRIVACY.md, and package.json `export-ignore`, so the zip holds the manifest, scripts, pages, styles, `lib/`, `icons/`, `fonts/`, and `LICENSE`. `dist/` is gitignored. The version in `manifest.json` and `package.json` must match; a test fails if they don't.
+
+---
+
 ## Known limitations
 
-- **Heuristic detection.** Confirmations shown inside cross-origin iframes, or only as images/animations, aren't detected. Use the popup.
-- **API key in the browser.** Calls go straight from the extension to Anthropic with your own key, which is fine for personal use. Publishing to the Chrome Web Store for other people would need a small backend so users don't need their own key.
+- **Heuristic detection.** Confirmations shown inside cross-origin iframes, or only as images or animations, aren't detected. Use the popup.
+- **Bring your own key.** Each user needs an Anthropic API key and pays Anthropic directly. There is no backend by design, so the key lives in the browser, unencrypted in `chrome.storage.local`. Users should set a spend limit in the Claude Console.
+- **Screen readers in the overlay.** `aria-modal` inside an iframe doesn't hide the host page from screen-reader browse mode. Fixing it would mean making the host page inert, which modifies its DOM, so it isn't done.
 - **No true auto-send.** That would need OAuth with an email provider (Gmail API, Microsoft Graph).

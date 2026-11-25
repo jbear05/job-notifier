@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -25,7 +28,8 @@ jobs:
               m.action.default_popup,
               m.options_ui.page,
               m.background.service_worker,
-              ...m.content_scripts.flatMap(c => c.js),
+              ...(m.content_scripts || []).flatMap(c => c.js),
+              ...(m.web_accessible_resources || []).flatMap(w => w.resources),
             ];
             const missing = files.filter(f => !fs.existsSync(f));
             if (missing.length) { console.error("Missing:", missing); process.exit(1); }
