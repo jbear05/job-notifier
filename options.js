@@ -106,7 +106,8 @@ async function removeFriend(i) {
   if (editing >= 0) closeForm();
   await saveFriends(friends.filter((_, j) => j !== i));
   say('friends-status', `Removed ${name}.`);
-  (editButton(i) || editButton(i - 1) || $('add-friend')).focus();
+  // An empty list reopens the add form, which hides the Add friend button.
+  (editButton(i) || editButton(i - 1) || $('f-name')).focus();
 }
 
 function openForm(i, focus = true) {
@@ -122,14 +123,20 @@ function openForm(i, focus = true) {
   $('f-notify').checked = f.notify;
   clearErrors(['f-name', 'f-email', 'f-skills', 'f-interests']);
   $('friend-form').hidden = false;
+  $('add-friend').hidden = i < 0; // no second "Add friend" while the add form is open
   if (focus) $('f-name').focus();
+}
+
+function hideForm() {
+  $('friend-form').hidden = true;
+  $('add-friend').hidden = false;
+  editing = -1;
 }
 
 function closeForm() {
   if (!friends.length) return; // the form stays open while the list is empty
-  $('friend-form').hidden = true;
   const back = editing >= 0 ? editButton(editing) : null;
-  editing = -1;
+  hideForm();
   return back || $('add-friend');
 }
 
@@ -166,8 +173,7 @@ async function submitFriend(e) {
   const error = await saveFriends(list);
   if (error) return say('friends-status', error, true);
   const index = adding ? friends.length - 1 : editing;
-  $('friend-form').hidden = true;
-  editing = -1;
+  hideForm();
   editButton(index).focus();
   say('friends-status', adding ? `Added ${entry.name}.` : `Saved changes to ${entry.name}.`);
 }
@@ -193,7 +199,7 @@ async function onImportFile() {
       $('import-error').textContent = `Couldn't import ${file.name}: ${error}`;
       return;
     }
-    if (friends.length) $('friend-form').hidden = true;
+    if (friends.length) hideForm();
     say('friends-status', `Imported ${plural(n)} from ${file.name}.`);
     return;
   }

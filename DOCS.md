@@ -72,8 +72,8 @@ The switch shows on only when `autoDetect` is `true` and the permission is held.
 | `chrome.storage.local` | `settings` | `{ apiKey, model, effort, threshold }`. Read through `JN.normalizeSettings`, so a model or effort outside the allowlists falls back to the default and the threshold is clamped to 0–1 |
 | `chrome.storage.local` | `autoDetect` | boolean, default `false` |
 | `chrome.storage.local` | `friends` | the friends list. Absent or `[]` on a fresh install; nothing is loaded until the user adds a friend |
-| `chrome.storage.session` | `jobs` | recently viewed postings by tab id: `{ [tabId]: { text, title, url, seenAt, hash } }`, text capped at 8,000 characters. Removed when the tab closes |
-| `chrome.storage.session` | `prompts` | the overlay state for each tab: `{ [tabId]: posting plus origin }`, where `origin` is the site that showed the confirmation. Cleared on close, when the tab moves to another origin, when the tab closes, and when auto-detect is turned off |
+| `chrome.storage.session` | `jobs` | recently viewed postings by tab id: `{ [tabId]: { text, title, url, seenAt, hash } }`, text capped at 8,000 characters. `url` holds only the site's hostname, never the path, query, or fragment. Removed when the tab closes |
+| `chrome.storage.session` | `prompts` | the overlay state for each tab: `{ [tabId]: posting plus origin }`, where `origin` is the site that showed the confirmation. Cleared on close, when the tab loads a new page (same-document URL changes keep it), when the tab closes, and when auto-detect is turned off |
 | `chrome.storage.session` | `prompted` | hashes of the last 100 postings already offered, so each posting is offered once |
 
 Rules:

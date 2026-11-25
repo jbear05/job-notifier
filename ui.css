@@ -83,7 +83,9 @@ button, input, select, textarea { font: inherit; color: inherit; margin: 0; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { background: var(--bg); border-color: var(--border-strong); color: var(--text); }
 .btn-secondary:hover { background: var(--bg-subtle); }
-.btn[aria-disabled="true"] { background: var(--bg-subtle); border-color: var(--border); color: var(--text-muted); cursor: default; }
+.btn[aria-disabled="true"] { cursor: default; }
+/* Finished or nothing to do, like "All checked emails opened". Success flashes keep their style. */
+.btn.done { background: var(--bg-subtle); border-color: var(--border); color: var(--text-muted); }
 .btn-text {
   min-width: 24px;
   min-height: 24px;

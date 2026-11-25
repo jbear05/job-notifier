@@ -77,7 +77,7 @@ Auto-detect is **off** until you turn it on. When it's on, Job Notifier notices 
 
 ## Privacy
 
-- Your key, settings, and friends are stored only in this browser (`chrome.storage.local`). Postings you viewed are kept in memory and cleared when Chrome closes.
+- Your key, settings, and friends are stored only in this browser (`chrome.storage.local`). With auto-detect on, postings you view (text, title, and the site's hostname) are kept in memory until you close that tab or Chrome.
 - Data leaves your browser only when you click **Find friends**, and only to Anthropic: the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level. Friends' email addresses and recruiter links are never sent.
 - There are no analytics and no developer server.
 
@@ -89,7 +89,7 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 |---|---|
 | `activeTab` | Reads the posting on the tab where you clicked the toolbar button, and only that tab. |
 | `scripting` | Runs the page-reading script on that tab, and registers the auto-detect script when you turn auto-detect on. |
-| `storage` | Saves your settings, key, and friends in this browser, and recent postings in memory until Chrome closes. |
+| `storage` | Saves your settings, key, and friends in this browser, and postings you view in memory until you close that tab or Chrome. |
 | `clipboardWrite` | Lets **Copy** and **Copy all** put drafts on your clipboard. |
 | `https://api.anthropic.com/*` | Sends the analysis request to Anthropic's API with your key. It's the only server Job Notifier contacts. |
 | `https://*/*` and `http://*/*` (optional) | Requested only when you turn on auto-detect, to spot postings and confirmations on job sites. Removed when you turn it off. |
@@ -128,7 +128,7 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 - **Everything:** remove Job Notifier on `chrome://extensions`, or right-click its toolbar button and choose **Remove from Chrome**. Chrome deletes everything it stored.
 - **Only your API key:** in settings, clear the key field and click **Save**. Revoke the key in the Claude Console too if you no longer need it.
 - **Friends:** click **Remove** on each one in settings.
-- **Recent postings:** close Chrome.
+- **Recent postings:** close the tab, or close Chrome.
 
 ## Development
 

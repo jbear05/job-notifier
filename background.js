@@ -8,6 +8,7 @@ importScripts('lib/core.js');
 
 const SITES = { origins: JN.ALL_SITES };
 const SCRIPT_ID = 'job-notifier-detect';
+const API_TIMEOUT_MS = 80000;
 
 // ── Settings & friends (set on the settings page) ──
 
@@ -52,7 +53,7 @@ async function applyAutoDetect() {
   if (on || (!scripts.length && !access)) return;
   if (scripts.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
   if (access) await chrome.permissions.remove(SITES);
-  await chrome.storage.session.remove('prompts');
+  await inSession(() => chrome.storage.session.remove('prompts'));
   // Scripts already running in open pages stop reading them too.
   for (const tab of await chrome.tabs.query({})) {
     chrome.tabs.sendMessage(tab.id, { type: 'STOP' }).catch(() => {});
@@ -84,21 +85,36 @@ function originOf(url) {
   }
 }
 
-async function rememberJob(sender, msg) {
-  const { jobs = {} } = await chrome.storage.session.get('jobs');
-  jobs[sender.tab.id] = { text: msg.text, title: msg.title || '', url: sender.url, seenAt: Date.now(), hash: JN.hashText(msg.text) };
-  await chrome.storage.session.set({ jobs });
+// Every read-modify-write of the session maps runs here, one at a time, so
+// messages from several tabs at once can't overwrite each other's entries.
+let sessionWrites = Promise.resolve();
+
+function inSession(step) {
+  const run = sessionWrites.then(step);
+  sessionWrites = run.catch(() => {});
+  return run;
+}
+
+// Only the posting's origin is kept as `url`, never its path, query, or fragment.
+function rememberJob(sender, msg) {
+  return inSession(async () => {
+    const { jobs = {} } = await chrome.storage.session.get('jobs');
+    jobs[sender.tab.id] = { text: msg.text, title: msg.title || '', url: originOf(sender.url), seenAt: Date.now(), hash: JN.hashText(msg.text) };
+    await chrome.storage.session.set({ jobs });
+  });
 }
 
 // A confirmation page in `tab` can offer a posting from the same tab or its
-// opener tab (Decision 13), once per posting. Returns whether to show the prompt.
-async function offerPrompt(sender) {
-  const { jobs = {}, prompts = {}, prompted = [] } = await chrome.storage.session.get(['jobs', 'prompts', 'prompted']);
-  const posting = JN.recallPosting(jobs, sender.tab);
-  if (!posting || prompted.includes(posting.hash)) return false;
-  prompts[sender.tab.id] = { ...posting, origin: originOf(sender.url) };
-  await chrome.storage.session.set({ prompts, prompted: [...prompted, posting.hash].slice(-100) });
-  return true;
+// opener tab (Decision 13), once per posting. Resolves to whether to show the prompt.
+function offerPrompt(sender) {
+  return inSession(async () => {
+    const { jobs = {}, prompts = {}, prompted = [] } = await chrome.storage.session.get(['jobs', 'prompts', 'prompted']);
+    const posting = JN.recallPosting(jobs, sender.tab);
+    if (!posting || prompted.includes(posting.hash)) return false;
+    prompts[sender.tab.id] = { ...posting, origin: originOf(sender.url) };
+    await chrome.storage.session.set({ prompts, prompted: [...prompted, posting.hash].slice(-100) });
+    return true;
+  });
 }
 
 // The prompt for a tab, only while the tab is still on the site that showed the confirmation.
@@ -108,25 +124,28 @@ async function getPrompt(tab) {
   return prompt && prompt.origin === originOf(tab.url) ? prompt : null;
 }
 
-async function dropPrompt(tabId, keep = () => false) {
-  const { prompts = {} } = await chrome.storage.session.get('prompts');
-  if (!prompts[tabId] || keep(prompts[tabId])) return;
-  delete prompts[tabId];
-  await chrome.storage.session.set({ prompts });
+function dropPrompt(tabId) {
+  return inSession(async () => {
+    const { prompts = {} } = await chrome.storage.session.get('prompts');
+    if (!prompts[tabId]) return;
+    delete prompts[tabId];
+    await chrome.storage.session.set({ prompts });
+  });
 }
 
-// A tab that moves to another site loses its prompt; same-site changes (single-page apps) keep it.
+// A full navigation or reload clears the tab's prompt (criterion 31). Same-document
+// URL changes (single-page apps) arrive without status 'loading' and keep it.
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.url) dropPrompt(tabId, p => p.origin === originOf(info.url));
+  if (info.status === 'loading') dropPrompt(tabId);
 });
 
-chrome.tabs.onRemoved.addListener(async tabId => {
+chrome.tabs.onRemoved.addListener(tabId => inSession(async () => {
   const { jobs = {}, prompts = {} } = await chrome.storage.session.get(['jobs', 'prompts']);
   if (!jobs[tabId] && !prompts[tabId]) return;
   delete jobs[tabId];
   delete prompts[tabId];
   await chrome.storage.session.set({ jobs, prompts });
-});
+}));
 
 // ── Claude ──
 
@@ -139,11 +158,15 @@ async function analyze(jobText) {
   if (status !== 'ok') return { ok: false, code: 'NO_FRIENDS', friends: status };
 
   const req = JN.buildRequest(jobText, friends, settings);
+  // Gives up before the overlay's own 90 s timer, so "Try again" starts a fresh
+  // request instead of waiting on a hung one.
+  const signal = AbortSignal.timeout(API_TIMEOUT_MS);
+  const timedOut = e => e?.name === 'TimeoutError';
   let response;
   try {
-    response = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    response = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal });
   } catch (e) {
-    return { ok: false, error: JN.describeApiError(0) };
+    return { ok: false, error: timedOut(e) ? JN.ERRORS.timeout : JN.describeApiError(0) };
   }
   if (!response.ok) {
     return { ok: false, error: JN.describeApiError(response.status, await response.json().catch(() => null)) };
@@ -152,7 +175,7 @@ async function analyze(jobText) {
     // threshold (normalized, 0-1) lets the overlay name it without reading storage.
     return { ok: true, result: JN.parseResponse(await response.json(), friends, settings.threshold), threshold: settings.threshold };
   } catch (e) {
-    return { ok: false, error: JN.ERRORS[e.code] || JN.ERRORS.incomplete };
+    return { ok: false, error: timedOut(e) ? JN.ERRORS.timeout : JN.ERRORS[e.code] || JN.ERRORS.incomplete };
   }
 }
 
@@ -169,6 +192,12 @@ function analyzeOnce(key, jobText) {
 // Claude call or receive friend data. There are no external listeners.
 
 async function onContentMessage(msg, sender) {
+  // The host page closed the frame (Escape, or the overlay never confirmed).
+  // Closing is always safe, so this needs no auto-detect check.
+  if (msg.type === 'OVERLAY_DISMISSED') {
+    await dropPrompt(sender.tab.id);
+    return { ok: true };
+  }
   if (!(await getSettings()).autoDetect) return { off: true };
   if (msg.type === 'JOB_SEEN') {
     await rememberJob(sender, msg);
@@ -182,6 +211,8 @@ async function onOverlayMessage(msg, tab) {
   if (msg.type === 'OVERLAY_STATE') {
     const prompt = await getPrompt(tab);
     if (!prompt) return { state: 'none' };
+    // Tells the content script the frame is working, so it keeps it (fail-safe in content.js).
+    chrome.tabs.sendMessage(tab.id, { type: 'OVERLAY_READY' }, { frameId: 0 }).catch(() => {});
     return { state: 'prompt', posting: JN.postingLabel(prompt), hasKey: !!(await getSettings()).apiKey };
   }
   await dropPrompt(tab.id);

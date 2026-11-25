@@ -4,6 +4,13 @@ Copy for the Job Notifier 2.0.0 submission, field by field, in the order the Dev
 
 Requirements checked on 2026-11-25 against developer.chrome.com: [store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing), [images](https://developer.chrome.com/docs/webstore/images), [privacy practices](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy), [user data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq), and the [manifest description](https://developer.chrome.com/docs/extensions/reference/manifest/description) limit (132 characters).
 
+## Before you submit
+
+- [ ] Recapture `docs/assets/screenshot-2-popup.png` by hand in real Chrome: the whole browser window with the toolbar, so the popup is visibly attached to it. 1280x800, PNG without alpha.
+- [ ] Check that `docs/assets/screenshot-4-prompt.png` exists.
+- [ ] On the Privacy practices tab, match the data-type checkboxes and certification wording to the Data usage section below. The public docs don't list them, so they couldn't be checked word for word.
+- [ ] Pick the subcategory under Productivity (Communication suggested). The public docs don't list the subcategories.
+
 ## Store listing tab
 
 ### Name
@@ -94,7 +101,7 @@ Used with activeTab to run the function that reads the visible text of the tab t
 
 **storage**
 ```text
-Saves the user's settings, Anthropic API key, and friends list in chrome.storage.local on their device, and recently viewed job postings in chrome.storage.session, which is memory only and cleared when Chrome closes. Nothing is synced or sent to a developer server.
+Saves the user's settings, Anthropic API key, and friends list in chrome.storage.local on their device, and job postings the user views (with auto-detect on) in chrome.storage.session, which is memory only; a posting is kept until the user closes that tab or Chrome. Nothing is synced or sent to a developer server.
 ```
 
 **clipboardWrite**
@@ -128,7 +135,7 @@ Collected (stored or processed by the extension, including locally, as the user 
 | Authentication information | Yes | The user's Anthropic API key. Stored locally and sent only to Anthropic to authorize each request. |
 | Personal communications | No | It doesn't read the user's email or messages. Drafts it writes are opened in the user's own email app and not kept after the browser closes. |
 | Location | No | |
-| Web history | Yes | With auto-detect on, the address, title, and time of viewed job postings, kept in session memory until the tab or Chrome closes. Never sent anywhere. |
+| Web history | Yes | With auto-detect on, the site's hostname (not the full address), page title, and time of viewed job postings, kept in session memory until the user closes that tab or Chrome. Never sent anywhere. |
 | User activity | No | No click, scroll, or keystroke monitoring. |
 | Website content | Yes | Visible text of a job posting. Sent to Anthropic, up to 8,000 characters, only when the user clicks Find friends. |
 

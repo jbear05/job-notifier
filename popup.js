@@ -3,7 +3,6 @@
 
 const $ = id => document.getElementById(id);
 const HELP = "The first 8,000 characters are sent to Claude, with your included friends' names, skills, interests, and level.";
-let threshold = JN.DEFAULT_SETTINGS.threshold;
 let input = null; // the last input state, so Edit text can return to it
 let moveFocus = false; // after the first click, each new state's heading takes focus
 
@@ -15,7 +14,6 @@ async function init() {
 
   const { settings, friends } = await chrome.storage.local.get(['settings', 'friends']);
   const s = JN.normalizeSettings(settings);
-  threshold = s.threshold;
   if (!s.apiKey) return showSetup();
   const status = JN.friendsStatus(JN.storedFriends(friends));
   if (status !== 'ok') return showNoFriends(status);
@@ -93,13 +91,14 @@ async function analyze(jobText) {
   input.text = jobText;
   show(COPY.loading[0], [loadingView()]);
   const reply = await analyzeRequest({ type: 'ANALYZE_JOB', jobText });
-  if (reply.ok) return showResult(reply.result);
+  if (reply.ok) return showResult(reply.result, reply.threshold);
   if (reply.code === 'NO_API_KEY') return showSetup();
   if (reply.code === 'NO_FRIENDS') return showNoFriends(reply.friends);
   showError(reply.error || JN.ERRORS.incomplete, () => analyze(jobText));
 }
 
-function showResult(result) {
+// threshold comes with the worker's reply: the setting that analysis actually used.
+function showResult(result, threshold) {
   const n = result.matches.length;
   if (!n) return show('No strong matches', noMatchesView(result.job, threshold));
   show(resultsHeading(n), resultsView(result));

@@ -185,8 +185,10 @@ function resultsView({ job, matches }) {
 
   function updateBulk() {
     if (!many) return;
-    const left = checked().filter(i => !sent.has(i)).length;
-    next.textContent = left ? `Open next email (${left} left)` : 'All checked emails opened';
+    const picked = checked();
+    const left = picked.filter(i => !sent.has(i)).length;
+    next.textContent = picked.length && !left ? 'All checked emails opened' : `Open next email (${left} left)`;
+    next.classList.toggle('done', !left);
     if (left) next.removeAttribute('aria-disabled');
     else next.setAttribute('aria-disabled', 'true');
   }

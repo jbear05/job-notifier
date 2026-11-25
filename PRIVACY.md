@@ -21,8 +21,8 @@ All of this is stored on your computer, in Chrome's extension storage for your p
 | Your Anthropic API key, model, effort, and match threshold | `chrome.storage.local` | Until you change it, clear it, or remove the extension |
 | Your friends list (names, email addresses, skills, interests, level, whether each is included) | `chrome.storage.local` | Until you edit it or remove the extension |
 | Whether auto-detect is on | `chrome.storage.local` | Until you change it or remove the extension |
-| Job postings you viewed: the posting text (up to 8,000 characters), page address, page title, and time viewed | `chrome.storage.session` | In memory only, until you close that tab or close Chrome. A posting is offered after a confirmation only within 30 minutes of viewing it |
-| A pending "Find friends for this job?" prompt (the posting and the site that showed the confirmation), and fingerprints of postings already offered | `chrome.storage.session` | In memory only. The prompt is cleared when you close it or leave that site; everything here is cleared when you close Chrome |
+| Job postings you viewed: the posting text (up to 8,000 characters), page title, the site's hostname (such as `jobs.example.com`, never the full address), and time viewed | `chrome.storage.session` | In memory only, until you close that tab or close Chrome. A posting is offered after a confirmation only within 30 minutes of viewing it |
+| A pending "Find friends for this job?" prompt (the posting and the site that showed the confirmation), and fingerprints of postings already offered | `chrome.storage.session` | In memory only. The prompt is cleared when you close it, load another page in that tab, or close the tab; everything here is cleared when you close Chrome |
 
 Analysis results (the job summary, scores, and drafts) are not stored. They exist only while the popup or results panel is open.
 
@@ -57,7 +57,7 @@ Job Notifier's use of this data follows the Chrome Web Store User Data Policy, i
 - **Everything:** remove Job Notifier from Chrome (uninstall it on `chrome://extensions`, or right-click the toolbar icon and choose **Remove from Chrome**). Chrome deletes all of its stored data.
 - **Only your key:** open Job Notifier's settings, clear the API key field, and click **Save**.
 - **Friends:** remove them one by one in settings. An exported friends file is yours to delete; it contains email addresses, so keep it private.
-- **Recent postings:** close Chrome.
+- **Recent postings:** close the tab, or close Chrome.
 
 Requests already sent to Anthropic are covered by Anthropic's retention policies. Deleting the key here doesn't delete the key itself; revoke it in the Claude Console if you no longer want it to work.
 

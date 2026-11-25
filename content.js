@@ -7,7 +7,9 @@
 let asked = false; // already asked about a confirmation on this page
 let stopped = false;
 let frame = null;
+let readyTimer = null;
 let returnFocus = null;
+const READY_TIMEOUT_MS = 5000;
 let checkTimer = null;
 let observer = null;
 let lastUrl = location.href;
@@ -72,12 +74,31 @@ function showFrame() {
   frame.src = chrome.runtime.getURL('overlay.html');
   // Focus may not land inside the frame until its page has loaded.
   frame.addEventListener('load', () => frame?.focus());
+  // Fail-safe: if the worker doesn't confirm the overlay is showing its prompt
+  // (OVERLAY_READY), remove the frame rather than leave an invisible layer over the page.
+  readyTimer = setTimeout(dismiss, READY_TIMEOUT_MS);
+  window.addEventListener('keydown', onHostKeydown, true);
   document.documentElement.appendChild(frame);
   frame.focus();
 }
 
+// Escape reaches the host document only when focus has left the frame.
+function onHostKeydown(e) {
+  if (e.key === 'Escape') dismiss();
+}
+
+// Closed from the host side: also clear this tab's prompt. Closing is always
+// safe, so a page faking Escape can only dismiss its own prompt.
+function dismiss() {
+  if (!frame) return;
+  closeFrame();
+  send({ type: 'OVERLAY_DISMISSED' });
+}
+
 function closeFrame() {
   if (!frame) return;
+  clearTimeout(readyTimer);
+  window.removeEventListener('keydown', onHostKeydown, true);
   frame.remove();
   frame = null;
   if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus();
@@ -91,9 +112,11 @@ function stop() {
   clearTimeout(checkTimer);
 }
 
-// Only the extension can send these: the service worker closes the frame when
-// the overlay asks, and stops this script when auto-detect is turned off.
+// Only the extension can send these: the service worker confirms the overlay is
+// showing, closes the frame when the overlay asks, and stops this script when
+// auto-detect is turned off.
 chrome.runtime.onMessage.addListener(msg => {
+  if (msg?.type === 'OVERLAY_READY') clearTimeout(readyTimer);
   if (msg?.type === 'CLOSE_OVERLAY') closeFrame();
   if (msg?.type === 'STOP') stop();
 });
