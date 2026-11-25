@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "for f in background.js content.js popup.js options.js lib/core.js; do node --check $f || exit 1; done",
+    "check": "for f in background.js content.js popup.js options.js overlay.js ui.js lib/core.js; do node --check $f || exit 1; done",
     "package": "mkdir -p dist && git archive --format=zip -o dist/job-notifier-$npm_package_version.zip HEAD"
   }
 }

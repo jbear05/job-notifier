@@ -32,6 +32,8 @@ const runtimeJs = runtimeCode.filter(x => x.f.endsWith('.js'));
 const runtimeCss = runtimeCode.filter(x => x.f.endsWith('.css'));
 const grepRuntime = (re, files = runtimeCode) => files.filter(x => re.test(x.text)).map(x => x.f);
 const KEY_RE = /sk-ant-[A-Za-z0-9_-]{20,}/;
+// The old bundled example list. Not the export download name `job-notifier-friends.json`.
+const OLD_FRIENDS_FILE = /(?<![\w-])friends\.json/;
 
 // What `git archive` would put in the zip if the working tree were committed now.
 // Uses a throwaway index and object dir so nothing is written to the repo.
@@ -128,7 +130,11 @@ test('criterion 1: no API key anywhere in the working tree', () => {
 });
 
 test('criterion 2: the example friend is never loaded as data', () => {
-  assert.deepEqual(grepRuntime(/friends\.json/), []);
+  for (const ref of ["fetch(chrome.runtime.getURL('friends.json'))", 'fetch("./friends.json")', "getURL('/friends.json')"]) {
+    assert.match(ref, OLD_FRIENDS_FILE, ref);
+  }
+  assert.doesNotMatch("download: 'job-notifier-friends.json'", OLD_FRIENDS_FILE);
+  assert.deepEqual(grepRuntime(OLD_FRIENDS_FILE), []);
 });
 
 // ── Permissions and site access ──
@@ -246,7 +252,7 @@ test('criterion 18: manifest.json and package.json are both version 2.0.0', () =
 
 test('criterion 19: the release zip holds only runtime files', () => {
   const files = packList();
-  const friendsUsed = runtimeCode.some(x => x.text.includes('friends.json'));
+  const friendsUsed = runtimeCode.some(x => OLD_FRIENDS_FILE.test(x.text));
   // Decision 17: LICENSE ships in the zip; README.md, PRIVACY.md, and other docs don't.
   const extra = files.filter(f => !RUNTIME.test(f) && f !== 'LICENSE' && !(f === 'friends.json' && friendsUsed));
   assert.deepEqual(extra, [], 'add export-ignore entries in .gitattributes for these');

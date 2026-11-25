@@ -1,254 +1,167 @@
-let currentMatches = [];
-let currentJob = null;
-let recruiterUrl = ""; // optional, local only: never sent to Claude
+// Popup (spec Design: Popup). Opening it never calls Claude: it reads the active
+// tab through activeTab + scripting (criterion 5) and waits for a click.
 
-document.addEventListener("DOMContentLoaded", init);
+const $ = id => document.getElementById(id);
+const HELP = "The first 8,000 characters are sent to Claude, with your included friends' names, skills, interests, and level.";
+let threshold = JN.DEFAULT_SETTINGS.threshold;
+let input = null; // the last input state, so Edit text can return to it
+let moveFocus = false; // after the first click, each new state's heading takes focus
+
+document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-  const toggle = document.getElementById("auto-toggle");
-  const { autoDetect } = await chrome.storage.local.get("autoDetect");
-  toggle.checked = autoDetect !== false;
-  toggle.addEventListener("change", () => chrome.storage.local.set({ autoDetect: toggle.checked }));
+  $('settings-btn').addEventListener('click', () => openSettings());
+  initAutoDetect();
 
-  document.getElementById("settings-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
-  document.getElementById("error-settings-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
-  document.getElementById("manual-analyze-btn").addEventListener("click", onAnalyzeClick);
-  document.getElementById("send-all-btn").addEventListener("click", sendNext);
-  document.getElementById("copy-all-btn").addEventListener("click", copyAll);
-  document.getElementById("recruiter-input").addEventListener("input", updateRecruiter);
+  const { settings, friends } = await chrome.storage.local.get(['settings', 'friends']);
+  const s = JN.normalizeSettings(settings);
+  threshold = s.threshold;
+  if (!s.apiKey) return showSetup();
+  const status = JN.friendsStatus(JN.storedFriends(friends));
+  if (status !== 'ok') return showNoFriends(status);
+  readPage();
+}
 
-  const { settings } = await chrome.storage.local.get("settings");
-  if (!settings?.apiKey) {
-    showError("Add your Anthropic API key in settings to get started.", true);
-    return;
+function show(title, nodes, error = false) {
+  const heading = h('h2', { tabindex: '-1' }, title);
+  $('panel').replaceChildren(h('div', { class: error ? 'stack error-block' : 'stack' }, heading, ...nodes));
+  if (moveFocus) heading.focus();
+}
+
+// ── States ──
+
+function showSetup() {
+  show('Set up Job Notifier', [
+    h('p', null, "Job Notifier drafts messages to friends who'd fit a job posting. It uses your own Anthropic API key, so you pay Anthropic directly for each analysis. Add your key and at least one friend to start."),
+    row(btn('Open settings', () => openSettings(), 'primary')),
+  ]);
+}
+
+function showNoFriends(status) {
+  const [title, body] = COPY[status] || COPY.empty;
+  const action = status === 'none-included'
+    ? btn('Open settings', () => openSettings(), 'primary')
+    : btn('Add friends', () => openSettings('friends'), 'primary');
+  show(title, [h('p', null, body), row(action)]);
+}
+
+async function readPage() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  const url = (tab && tab.url) || '';
+  // chrome:// pages, the Web Store, and other non-http(s) pages can't be scripted.
+  if (!/^https?:/.test(url) || /^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore)\//.test(url)) {
+    return showInput('Paste a job posting', "Chrome doesn't let extensions read this page. Paste the posting text below.");
   }
-
-  // Opening the popup never calls Claude by itself; it just pre-fills the
-  // detected posting so you can review it and click the button.
-  let tab;
-  try {
-    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  } catch (e) {
-    showInput("Paste the job posting text below:");
-    return;
-  }
-
-  // activeTab lets the popup read the tab it was opened on, including tabs
-  // that were open before the extension was installed (criterion 5).
-  if (!/^https?:/.test(tab?.url || "")) {
-    showInput("Chrome doesn't let extensions read this page. Paste the posting text below.");
-    return;
-  }
-  let text;
+  let text = '';
   try {
     const target = { tabId: tab.id };
-    await chrome.scripting.executeScript({ target, files: ["lib/core.js"] });
+    await chrome.scripting.executeScript({ target, files: ['lib/core.js'] });
     [{ result: text }] = await chrome.scripting.executeScript({ target, func: () => JN.extractJobText(document) });
   } catch (e) {
-    showInput("Couldn't read this page. Reload it and open Job Notifier again, or paste the posting text below.");
-    return;
+    return showInput('Paste a job posting', "Couldn't read this page. Reload it and open Job Notifier again, or paste the posting text below.");
   }
-  if (JN.isJobPage(text)) {
-    showInput("Found a job posting on this page. Check the text, then find matches:", text);
-  } else {
-    showInput("This doesn't look like a job posting. Paste the job text below:");
-  }
+  if (JN.isJobPage(text)) showInput('Job posting found', 'Check the text, then find friends who fit.', text);
+  else showInput('Paste a job posting', "This page doesn't look like a job posting. Paste the posting text below.");
 }
 
-async function onAnalyzeClick() {
-  const text = document.getElementById("manual-input").value.trim();
-  if (text.length < 50) {
-    document.getElementById("manual-error").textContent = "Please paste more text (at least 50 characters).";
-    return;
-  }
-  document.getElementById("manual-error").textContent = "";
-  showState("loading");
-
-  try {
-    const result = await analyzeViaBackground(text);
-    currentJob = result.job;
-    currentMatches = result.matches || [];
-    renderResults();
-  } catch (e) {
-    if (e.message === "NO_API_KEY") showError("Add your Anthropic API key in settings to get started.", true);
-    else showError(`Analysis failed: ${e.message}`);
-  }
+// Nothing gets focus here, so a stray Enter can't start a paid request.
+function showInput(title, body, text = '') {
+  input = { title, body, text };
+  const box = h('textarea', { id: 'posting', rows: 8, 'aria-describedby': 'posting-help posting-error', value: text || '' });
+  const error = h('p', { id: 'posting-error', class: 'small error-text' });
+  const find = () => {
+    const jobText = box.value.trim();
+    if (jobText.length < 50) {
+      box.setAttribute('aria-invalid', 'true');
+      error.textContent = 'Paste more of the posting. Job Notifier needs at least 50 characters.';
+      return box.focus();
+    }
+    analyze(jobText);
+  };
+  show(title, [
+    h('p', null, body),
+    h('div', { class: 'field' },
+      h('label', { class: 'label', for: 'posting' }, 'Posting text'),
+      h('p', { id: 'posting-help', class: 'small muted' }, HELP),
+      box, error),
+    row(btn('Find friends', find, 'primary')),
+  ]);
 }
 
-// All Claude calls go through the background worker, so there's one code path.
-function analyzeViaBackground(jobText) {
-  return new Promise((resolve, reject) => {
-    const port = chrome.runtime.connect({ name: "analyze" });
-    let done = false;
-    port.onMessage.addListener(msg => {
-      done = true;
-      port.disconnect();
-      if (msg.ok) return resolve(msg.result);
-      // Reply shape: { code: 'NO_API_KEY' | 'NO_FRIENDS' } or { error: { title, body, action } }.
-      const err = msg.error ? `${msg.error.title}. ${msg.error.body}` : msg.code === "NO_FRIENDS" ? "Add a friend in settings first." : msg.code;
-      reject(new Error(err || "Analysis failed."));
-    });
-    port.onDisconnect.addListener(() => {
-      if (!done) reject(new Error("Connection closed unexpectedly."));
-    });
-    port.postMessage({ type: "ANALYZE_JOB", jobText });
+async function analyze(jobText) {
+  moveFocus = true;
+  input.text = jobText;
+  show(COPY.loading[0], [loadingView()]);
+  const reply = await analyzeRequest({ type: 'ANALYZE_JOB', jobText });
+  if (reply.ok) return showResult(reply.result);
+  if (reply.code === 'NO_API_KEY') return showSetup();
+  if (reply.code === 'NO_FRIENDS') return showNoFriends(reply.friends);
+  showError(reply.error || JN.ERRORS.incomplete, () => analyze(jobText));
+}
+
+function showResult(result) {
+  const n = result.matches.length;
+  if (!n) return show('No strong matches', noMatchesView(result.job, threshold));
+  show(resultsHeading(n), resultsView(result));
+}
+
+function showError(error, retry) {
+  show(error.title, [
+    h('p', null, error.body),
+    row(...errorActions(error.action, retry), btn('Edit text', () => showInput(input.title, input.body, input.text))),
+  ], true);
+}
+
+// ── Auto-detect switch (engineer A's contract; criteria 7, 36) ──
+// The worker drives registration from chrome.permissions events, because this
+// popup can close while Chrome's permission dialog is open.
+
+function initAutoDetect() {
+  const toggle = $('auto-toggle');
+  const panel = $('auto-panel');
+  const say = text => { $('auto-status').textContent = text; };
+  let access = false;
+
+  const sync = async () => {
+    const [{ autoDetect }, granted] = await Promise.all([
+      chrome.storage.local.get('autoDetect'),
+      chrome.permissions.contains({ origins: JN.ALL_SITES }),
+    ]);
+    access = granted;
+    toggle.checked = autoDetect === true && granted;
+  };
+  sync();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && 'autoDetect' in changes) sync();
   });
-}
+  chrome.permissions.onAdded.addListener(sync);
+  chrome.permissions.onRemoved.addListener(sync);
 
-// ── Results ──
-
-const sent = new Set();
-
-function renderResults() {
-  showState("results");
-  sent.clear();
-  const job = currentJob || {};
-  const esc = JN.escHtml;
-
-  document.getElementById("job-card").innerHTML = `
-    <div class="job-title">${esc(job.title || "Unknown title")}</div>
-    <div class="job-meta">
-      <span>${esc(job.company || "Unknown company")}</span>
-      ${job.level ? `<span class="tag">${esc(job.level)}</span>` : ""}
-      ${job.remote ? `<span class="tag tag-remote">Remote</span>` : ""}
-      ${job.location ? `<span class="tag-location">${esc(job.location)}</span>` : ""}
-    </div>
-    ${job.skills?.length ? `<div class="job-skills">${job.skills.map(s => `<span class="skill">${esc(s)}</span>`).join("")}</div>` : ""}
-  `;
-
-  const matchList = document.getElementById("match-list");
-  const count = currentMatches.length;
-  document.getElementById("empty-state").hidden = count > 0;
-  document.getElementById("bulk-actions").hidden = count < 2;
-  document.getElementById("bulk-hint").hidden = count < 2;
-  document.getElementById("recruiter").hidden = count === 0;
-  document.getElementById("recruiter-input").value = "";
-  updateRecruiter();
-
-  matchList.innerHTML = currentMatches.map((m, i) => `
-    <div class="match-card" data-index="${i}">
-      <div class="match-header">
-        <label class="match-select">
-          <input type="checkbox" class="friend-checkbox" data-index="${i}" checked>
-          <span class="match-name">${esc(m.name)}</span>
-        </label>
-        <span class="match-score" title="Relevance score">${Math.round(m.score * 100)}% match</span>
-      </div>
-      <textarea class="message-box" rows="4" data-index="${i}">${esc(m.message)}</textarea>
-      <div class="card-actions">
-        <button class="send-btn" data-index="${i}">Send</button>
-        <button class="copy-btn" data-index="${i}">Copy</button>
-      </div>
-    </div>
-  `).join("");
-
-  matchList.querySelectorAll("textarea").forEach(ta => {
-    ta.addEventListener("input", e => {
-      currentMatches[parseInt(e.target.dataset.index)].message = e.target.value;
-    });
+  toggle.addEventListener('change', () => {
+    if (!toggle.checked) {
+      chrome.storage.local.set({ autoDetect: false });
+      return say('Auto-detect is off.');
+    }
+    if (access) {
+      chrome.storage.local.set({ autoDetect: true });
+      return say('Auto-detect is on.');
+    }
+    // Explain before Chrome's prompt; the switch stays off until access is granted.
+    toggle.checked = false;
+    panel.hidden = false;
+    $('auto-heading').focus();
   });
-  matchList.querySelectorAll(".send-btn").forEach(btn => {
-    btn.addEventListener("click", e => {
-      send(parseInt(e.target.dataset.index));
-      flashButton(e.target, "Opened!");
-    });
+
+  $('auto-continue').addEventListener('click', async () => {
+    const granted = await chrome.permissions.request({ origins: JN.ALL_SITES });
+    if (granted) await chrome.storage.local.set({ autoDetect: true });
+    toggle.checked = granted;
+    panel.hidden = true;
+    say(granted ? 'Auto-detect is on.' : "Chrome didn't grant site access, so auto-detect is still off.");
+    toggle.focus();
   });
-  matchList.querySelectorAll(".copy-btn").forEach(btn => {
-    btn.addEventListener("click", async e => {
-      const m = currentMatches[parseInt(e.target.dataset.index)];
-      await copyToClipboard(JN.withRecruiter(m.message, recruiterUrl));
-      flashButton(e.target, "Copied!");
-    });
+  $('auto-cancel').addEventListener('click', () => {
+    panel.hidden = true;
+    toggle.focus();
   });
-  matchList.querySelectorAll(".friend-checkbox").forEach(cb => cb.addEventListener("change", updateSendAll));
-
-  updateSendAll();
-}
-
-function checkedIndexes() {
-  return [...document.querySelectorAll(".friend-checkbox:checked")].map(cb => parseInt(cb.dataset.index));
-}
-
-function send(i) {
-  window.open(JN.mailtoUrl(currentMatches[i], currentJob, recruiterUrl));
-  sent.add(i);
-  updateSendAll();
-}
-
-// Browsers block all but the first window.open per click, so "send all"
-// opens one checked email per click instead of firing them all at once.
-function sendNext() {
-  const next = checkedIndexes().find(i => !sent.has(i));
-  if (next !== undefined) send(next);
-}
-
-function updateSendAll() {
-  const btn = document.getElementById("send-all-btn");
-  const left = checkedIndexes().filter(i => !sent.has(i)).length;
-  btn.textContent = left ? `Open next email (${left} left)` : "All checked emails opened";
-  btn.disabled = !left;
-}
-
-async function copyAll(e) {
-  const selected = checkedIndexes().map(i => currentMatches[i]);
-  await copyToClipboard(JN.combinedMessages(selected, currentJob, recruiterUrl));
-  flashButton(e.target, "Copied!");
-}
-
-function updateRecruiter() {
-  const input = document.getElementById("recruiter-input");
-  const status = document.getElementById("recruiter-status");
-  const url = JN.normalizeRecruiterUrl(input.value);
-  recruiterUrl = url || "";
-  const bad = url === null;
-  input.classList.toggle("invalid", bad);
-  status.className = `recruiter-status ${bad ? "bad" : url ? "ok" : ""}`;
-  status.textContent = bad
-    ? "That doesn't look like a LinkedIn link, so it won't be included."
-    : url ? "Added to your emails." : "";
-}
-
-// ── UI helpers ──
-
-function showState(state) {
-  document.getElementById("loading").hidden = state !== "loading";
-  document.getElementById("results").hidden = state !== "results";
-  document.getElementById("error-state").hidden = state !== "error";
-  document.getElementById("manual-fallback").hidden = state !== "manual";
-}
-
-function showError(text, offerSettings = false) {
-  showState("error");
-  document.getElementById("error-message").textContent = text;
-  document.getElementById("error-settings-btn").hidden = !offerSettings;
-}
-
-function showInput(msg, prefill = "") {
-  showState("manual");
-  document.getElementById("fallback-message").textContent = msg;
-  document.getElementById("manual-input").value = prefill;
-}
-
-async function copyToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (e) {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-  }
-}
-
-function flashButton(btn, label) {
-  const original = btn.textContent;
-  btn.textContent = label;
-  btn.disabled = true;
-  setTimeout(() => {
-    btn.textContent = original;
-    btn.disabled = false;
-    if (btn.id === "send-all-btn") updateSendAll();
-  }, 1500);
 }

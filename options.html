@@ -2,54 +2,194 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Job Notifier settings</title>
+  <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
-  <main>
+<main class="page">
+  <header class="page-header">
     <h1>Job Notifier settings</h1>
-    <p class="lede">Everything here is stored only in this browser. Your API key and friends' contact details are never shared with job sites; only names, skills, interests, and level are sent to Claude.</p>
+    <p class="lede">To start, add your Anthropic API key and at least one friend. Everything here is saved only in this browser.</p>
+  </header>
 
-    <section>
-      <h2>Claude</h2>
-      <label for="api-key">Anthropic API key</label>
-      <input id="api-key" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
-      <p class="help">Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+  <!-- 1. Claude -->
+  <section id="claude" class="section" aria-labelledby="claude-heading">
+    <div class="section-intro">
+      <h2 id="claude-heading">Claude</h2>
+      <p class="small muted">Job Notifier calls Claude with your own key. There is no Job Notifier server.</p>
+    </div>
+    <form id="claude-form" class="section-body" novalidate>
+      <div class="disclosure">
+        <p class="label">What it costs and what gets sent</p>
+        <ul>
+          <li><strong>You pay Anthropic directly.</strong> Each time you click Find friends, Job Notifier sends one request to Anthropic's API with your key. It's billed to your Anthropic account at Anthropic's prices. Job Notifier itself is free. <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic API pricing</a></li>
+          <li><strong>Sent to Anthropic:</strong> the job posting text (up to 8,000 characters), and each included friend's name, skills, interests, and level.</li>
+          <li><strong>Never sent:</strong> your friends' email addresses and any recruiter link you paste. They stay in this browser. Your API key goes only to Anthropic, to authorize each request.</li>
+          <li><strong>Stored unencrypted.</strong> Your key is saved unencrypted in this Chrome profile. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a></li>
+          <li>Nothing goes to the developer or to any analytics service. <a href="https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md" target="_blank" rel="noopener">Privacy policy</a></li>
+        </ul>
+      </div>
 
-      <div class="row">
-        <div>
-          <label for="model">Model</label>
-          <input id="model" type="text" spellcheck="false" />
+      <div class="field">
+        <label class="label" for="api-key">Anthropic API key</label>
+        <input id="api-key" type="password" autocomplete="off" spellcheck="false" aria-describedby="api-key-help api-key-error" />
+        <p id="api-key-help" class="small muted">Create a key in the <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">Anthropic Console</a>. It starts with sk-ant-.</p>
+        <p id="api-key-error" class="small error-text"></p>
+      </div>
+
+      <div class="field">
+        <label class="label" for="model">Model</label>
+        <select id="model" aria-describedby="model-help model-note"></select>
+        <p id="model-help" class="small muted">Smaller models cost less per analysis and are usually enough for matching.</p>
+        <p id="model-note" class="small" hidden></p>
+      </div>
+
+      <details id="more" class="more">
+        <summary>More options</summary>
+        <div class="stack more-body">
+          <div class="field">
+            <label class="label" for="effort">Effort</label>
+            <select id="effort" aria-describedby="effort-help">
+              <option value="low">Low (cheapest)</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+            <p id="effort-help" class="small muted">Higher effort can score friends more carefully and costs more.</p>
+          </div>
+          <div class="field">
+            <label class="label" for="threshold">Match threshold</label>
+            <input id="threshold" type="number" min="0" max="1" step="0.05" aria-describedby="threshold-help threshold-error" />
+            <p id="threshold-help" class="small muted">Friends scoring below this aren't shown. 0.6 means a 60% match.</p>
+            <p id="threshold-error" class="small error-text"></p>
+          </div>
         </div>
-        <div>
-          <label for="effort">Effort</label>
-          <select id="effort">
-            <option value="low">Low (cheapest)</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
+      </details>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <p id="claude-status" class="small" role="status"></p>
+      </div>
+    </form>
+  </section>
+
+  <!-- 2. Friends -->
+  <section id="friends" class="section" aria-labelledby="friends-heading">
+    <div class="section-intro">
+      <h2 id="friends-heading">Friends</h2>
+      <p class="small muted">People you might pass a job to. Email addresses stay in this browser.</p>
+    </div>
+    <div class="section-body">
+      <p id="friends-empty" hidden>No friends yet. Add the people you'd share job postings with.</p>
+      <ul id="friend-list" class="friend-list" aria-label="Friends"></ul>
+
+      <div class="stack">
+        <div class="actions">
+          <button type="button" id="add-friend" class="btn btn-secondary">Add friend</button>
+          <button type="button" id="import-btn" class="btn-text">Import JSON</button>
+          <button type="button" id="export-btn" class="btn-text">Export JSON</button>
+          <input type="file" id="import-file" accept=".json,application/json" hidden />
         </div>
-        <div>
-          <label for="threshold">Match threshold</label>
-          <input id="threshold" type="number" min="0" max="1" step="0.05" />
+        <p id="export-note" class="small muted">Exports include email addresses. Keep the file private.</p>
+        <p id="friends-status" class="small" role="status"></p>
+        <p id="import-error" class="small error-text" role="alert"></p>
+      </div>
+
+      <div id="import-panel" class="import-panel stack" hidden>
+        <p id="import-summary" tabindex="-1"></p>
+        <div class="actions">
+          <button type="button" id="import-add" class="btn btn-secondary">Add to my list</button>
+          <button type="button" id="import-replace" class="btn btn-secondary">Replace my list</button>
+          <button type="button" id="import-cancel" class="btn-text">Cancel</button>
         </div>
       </div>
 
-      <label class="check"><input id="auto-detect" type="checkbox" /> Automatically suggest friends after I apply to a job</label>
-    </section>
-
-    <section>
-      <h2>Friends</h2>
-      <p class="help">A JSON list. Each friend needs a <code>name</code>; <code>contact</code>, <code>skills</code>, <code>interests</code>, <code>level</code> are optional. Set <code>"notify": false</code> to skip someone.</p>
-      <textarea id="friends" rows="16" spellcheck="false"></textarea>
-    </section>
-
-    <div class="actions">
-      <button id="save">Save</button>
-      <span id="status" role="status"></span>
+      <form id="friend-form" class="friend-form stack" novalidate hidden>
+        <h3 id="form-heading">Add a friend</h3>
+        <div class="field">
+          <label class="label" for="f-name">Name (required)</label>
+          <input id="f-name" type="text" required maxlength="100" autocomplete="off" aria-describedby="f-name-error" />
+          <p id="f-name-error" class="small error-text"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="f-email">Email</label>
+          <input id="f-email" type="email" maxlength="254" autocomplete="off" aria-describedby="f-email-help f-email-error" />
+          <p id="f-email-help" class="small muted">Used only to address the email draft. Never sent to Claude.</p>
+          <p id="f-email-error" class="small error-text"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="f-skills">Skills</label>
+          <input id="f-skills" type="text" autocomplete="off" aria-describedby="f-skills-help f-skills-error" />
+          <p id="f-skills-help" class="small muted">Separate with commas, e.g. Python, React, REST APIs.</p>
+          <p id="f-skills-error" class="small error-text"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="f-interests">Interests</label>
+          <input id="f-interests" type="text" autocomplete="off" aria-describedby="f-interests-help f-interests-error" />
+          <p id="f-interests-help" class="small muted">Separate with commas, e.g. fintech, developer tools.</p>
+          <p id="f-interests-error" class="small error-text"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="f-level">Level</label>
+          <input id="f-level" type="text" maxlength="50" list="levels" autocomplete="off" aria-describedby="f-level-help" />
+          <datalist id="levels">
+            <option value="Internship"></option>
+            <option value="New grad"></option>
+            <option value="Mid level"></option>
+            <option value="Senior"></option>
+            <option value="Staff or above"></option>
+          </datalist>
+          <p id="f-level-help" class="small muted">e.g. internship, new grad, senior.</p>
+        </div>
+        <label class="check"><input id="f-notify" type="checkbox" checked /> Include in matching</label>
+        <div class="actions">
+          <button type="submit" id="form-submit" class="btn btn-primary">Add friend</button>
+          <button type="button" id="form-cancel" class="btn btn-secondary">Cancel</button>
+        </div>
+      </form>
     </div>
-  </main>
-  <script src="lib/core.js"></script>
-  <script src="options.js"></script>
+  </section>
+
+  <!-- 3. Auto-detect -->
+  <section id="auto-detect" class="section" aria-labelledby="auto-heading">
+    <div class="section-intro">
+      <h2 id="auto-heading">Auto-detect</h2>
+      <p class="small muted">Off unless you turn it on.</p>
+    </div>
+    <div class="section-body">
+      <label class="switch">
+        <input type="checkbox" role="switch" id="auto-toggle" aria-describedby="auto-help-1 auto-help-2" />
+        <span class="track" aria-hidden="true"></span>
+        <span class="label">Ask me to find friends after I apply to a job</span>
+      </label>
+      <p id="auto-help-1" class="small muted">When this is on, Job Notifier reads the visible text of pages you open, in your browser, to spot job postings and application confirmations. When a confirmation follows a posting, it asks before sending anything to Claude. Nothing is sent until you click Find friends.</p>
+      <p id="auto-help-2" class="small muted">Turning it on asks Chrome for access to all sites, because applications happen on many different sites. Turning it off stops all page reading. Without it, click the Job Notifier toolbar button on a posting.</p>
+      <p id="auto-status" class="small" role="status"></p>
+    </div>
+  </section>
+
+  <!-- 4. Privacy and data -->
+  <section id="privacy" class="section" aria-labelledby="privacy-heading">
+    <div class="section-intro">
+      <h2 id="privacy-heading">Privacy and data</h2>
+    </div>
+    <div class="section-body">
+      <p>Your key, settings, and friends are stored only in this browser. Job postings you view are kept in memory and cleared when Chrome closes.</p>
+      <p class="actions">
+        <a href="https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md" target="_blank" rel="noopener">Read the privacy policy</a>
+        <a href="https://github.com/jbear05/job-notifier/issues" target="_blank" rel="noopener">Report a problem</a>
+      </p>
+      <p>To delete everything Job Notifier stored, remove it from Chrome's Extensions page. To remove only your key, clear the key field and save.</p>
+    </div>
+  </section>
+
+  <footer class="page-footer small muted">
+    Job Notifier <span id="version"></span> · MIT License · <a href="https://github.com/jbear05/job-notifier" target="_blank" rel="noopener">Source on GitHub</a>
+  </footer>
+</main>
+<script src="lib/core.js"></script>
+<script src="ui.js"></script>
+<script src="options.js"></script>
 </body>
 </html>

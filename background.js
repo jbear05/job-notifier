@@ -149,7 +149,8 @@ async function analyze(jobText) {
     return { ok: false, error: JN.describeApiError(response.status, await response.json().catch(() => null)) };
   }
   try {
-    return { ok: true, result: JN.parseResponse(await response.json(), friends, settings.threshold) };
+    // threshold (normalized, 0-1) lets the overlay name it without reading storage.
+    return { ok: true, result: JN.parseResponse(await response.json(), friends, settings.threshold), threshold: settings.threshold };
   } catch (e) {
     return { ok: false, error: JN.ERRORS[e.code] || JN.ERRORS.incomplete };
   }

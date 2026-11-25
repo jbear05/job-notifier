@@ -1,0 +1,43 @@
+/* Overlay page layout (spec Design: Confirmation prompt and results overlay).
+   The frame covers the viewport; html and body stay transparent so only the
+   scrim and the panel show over the host page. */
+html, body { background: transparent; }
+body { min-height: 100vh; overflow: hidden; }
+
+.scrim { position: fixed; inset: 0; background: var(--scrim); }
+
+.panel {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: var(--shadow-panel);
+}
+.panel-header { flex: none; padding: var(--space-4); }
+.panel-body { padding: 0 var(--space-4) var(--space-4); overflow-y: auto; }
+
+.eyebrow-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.eyebrow { display: flex; align-items: center; gap: var(--space-2); color: var(--text-muted); font-size: 12px; line-height: 16px; font-weight: 600; }
+#state-heading { font-size: 20px; line-height: 26px; }
+
+.posting { padding: var(--space-3); border-radius: var(--radius); background: var(--bg-subtle); }
+.posting-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+@media (max-width: 479px) {
+  .panel { top: 8px; right: 8px; left: 8px; width: auto; max-width: none; max-height: calc(100vh - 16px); }
+}

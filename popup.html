@@ -2,79 +2,37 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Job Notifier</title>
+  <link rel="stylesheet" href="ui.css" />
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-
-  <!-- Persistent header -->
-  <div class="popup-header">
-    <span class="popup-brand">Job Notifier</span>
-    <div class="header-right">
-      <label class="toggle-wrap" title="Auto-detect job applications">
-        <span class="toggle-label">Auto-detect</span>
-        <span class="toggle">
-          <input type="checkbox" id="auto-toggle">
-          <span class="toggle-slider"></span>
-        </span>
+  <header class="popup-header">
+    <h1 class="wordmark">Job Notifier</h1>
+    <div class="header-actions">
+      <label class="switch">
+        <span>Auto-detect</span>
+        <input type="checkbox" role="switch" id="auto-toggle" />
+        <span class="track" aria-hidden="true"></span>
       </label>
-      <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+      <button type="button" id="settings-btn" class="btn-text">Settings</button>
     </div>
-  </div>
+  </header>
+  <p id="auto-status" class="small muted status-line" role="status"></p>
 
-  <!-- Loading state -->
-  <div id="loading">
-    <div class="spinner"></div>
-    <p class="loading-text">Analyzing job posting…</p>
-  </div>
-
-  <!-- Input state: detected posting (pre-filled) or paste your own -->
-  <div id="manual-fallback" hidden>
-    <p id="fallback-message" class="fallback-message"></p>
-    <textarea
-      id="manual-input"
-      class="manual-input"
-      rows="8"
-      placeholder="Paste the job posting text here…"
-    ></textarea>
-    <p id="manual-error" class="manual-error"></p>
-    <button id="manual-analyze-btn" class="analyze-btn">Find matching friends</button>
-  </div>
-
-  <!-- Results state -->
-  <div id="results" hidden>
-    <div id="job-card" class="job-card"></div>
-
-    <div id="recruiter" class="recruiter" hidden>
-      <label class="recruiter-label" for="recruiter-input">Do you have a recruiter contact for this position?</label>
-      <p class="recruiter-sub">Optional. Paste their LinkedIn and it's added to each email and to Copy all.</p>
-      <input id="recruiter-input" class="recruiter-input" type="url" inputmode="url" autocomplete="off"
-             placeholder="https://www.linkedin.com/in/…">
-      <p id="recruiter-status" class="recruiter-status" aria-live="polite"></p>
+  <section id="auto-panel" class="auto-panel stack" aria-labelledby="auto-heading" hidden>
+    <h2 id="auto-heading" tabindex="-1">Turn on auto-detect?</h2>
+    <p>Job Notifier will read the visible text of pages you open to spot job postings and application confirmations. Nothing is sent to Claude until you click Find friends. Chrome will ask you to allow access to all sites.</p>
+    <div class="actions">
+      <button type="button" id="auto-continue" class="btn btn-primary">Continue</button>
+      <button type="button" id="auto-cancel" class="btn btn-secondary">Cancel</button>
     </div>
+  </section>
 
-    <div id="match-list"></div>
-
-    <div id="empty-state" class="empty-state" hidden>
-      No strong matches for this job.
-    </div>
-
-    <div id="bulk-actions" class="bulk-actions" hidden>
-      <button id="send-all-btn" class="send-all-btn">Open next email</button>
-      <button id="copy-all-btn" class="copy-btn">Copy all</button>
-    </div>
-    <p id="bulk-hint" class="bulk-hint" hidden>Browsers only allow one email window per click, so this opens the checked emails one at a time.</p>
-  </div>
-
-  <!-- Error state -->
-  <div id="error-state" hidden>
-    <div class="error-icon">⚠</div>
-    <p id="error-message" class="error-message"></p>
-    <button id="error-settings-btn" class="analyze-btn" hidden>Open settings</button>
-  </div>
+  <main id="panel"></main>
 
   <script src="lib/core.js"></script>
+  <script src="ui.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
