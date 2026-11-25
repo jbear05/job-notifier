@@ -820,3 +820,18 @@ All three .woff2 files start with the `wOF2` signature. Both license texts are S
 - Reviewer nit (threshold): the popup's no-matches text uses `threshold` from the worker's reply, the value that analysis used, and no longer keeps the one read on open (popup.js).
 - Files: options.html, options.css, options.js, ui.css, ui.js, popup.js. Nothing committed.
 - Test output: `npm test` runs 87 tests: 81 pass, 6 fail. All six are qa's round-1 worker and core tests waiting on engineer A (five-tab race x2, navigation clearing, hostname only, stripDelimiters timing, 32a dynamic ID); none are in my files. `npm run check --script-shell=bash` passes.
+
+**Team lead, resumed verification (2026-11-25):**
+- Engineer A's final handoff entry was absent. Verified the implementation checkpoint at `7214fd5` and ran `npm test` (87 passed), `npm run check --script-shell=bash` (passed with Git Bash on PATH in an approved execution), and `git diff --check` (passed). The history review found no production-shaped API key and confirmed the previously approved owner-email exception.
+- Rechecked the three configured Claude API model IDs against [Anthropic's model list](https://platform.claude.com/docs/en/models/overview) and image dimensions against [Chrome Web Store image guidance](https://developer.chrome.com/docs/webstore/images).
+- GitHub reports PR [#4](https://github.com/jbear05/job-notifier/pull/4) is open against `main`, with head `chore/claude-test-hook`. No release PR exists yet.
+
+**Engineer D, round 2 asset handoff:**
+- Added `docs/assets/screenshot-4-prompt.png` and refreshed `screenshot-3-settings.png` with the current disclosure and key help. The re-rendered overlay and promo tile were byte-identical. Retained the existing popup capture pending the user's whole-window Chrome screenshot.
+- The headless Chrome render ran in an approved execution after Crashpad was blocked inside the sandbox. The 22 review captures are in `dist/review/`. The four store screenshots are 1280×800 RGB PNGs and the promo tile is 440×280 RGB. The three criterion 21 tests passed. Next owner was designer.
+
+**Team lead, review round 2 on `7214fd5` and regenerated captures:**
+- Reviewer **FAIL**. An in-flight confirmation can recreate a prompt after full navigation. Prompt lookup bypasses queued deletion. Readiness is sent before settings return or the frame paints. The 80-second worker deadline exceeds Chrome's [30-second fetch response limit](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle/#idle-shutdown), and its message says 90 seconds. Stored posting origins include scheme and port despite the hostname-only disclosure.
+- Designer **PASS** for the rendered UI and generated store assets. Verified the settings width cap, mobile layout, one first-run Add friend action, updated retention, and the prompt and results layouts. The real-Chrome toolbar capture and live keyboard/focus evidence remain pending under the original manual gate.
+- Security **FAIL**. Confirmed the premature ready signal and the prompt lookup ordering. `STOP` also leaves an already open frame on the page. The dynamic sender scheme plus matching browser-supplied extension ID passes code inspection. The focused suite passed 53/53.
+- Next owners: QA to run regression tests red, then engineer to fix and return for review. The clean-profile Chrome walkthrough must include an inert frame on initialization failure, removal and focus restoration when auto-detect stops, and confirmation cleanup versus same-document URL changes.

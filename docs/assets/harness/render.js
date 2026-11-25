@@ -118,6 +118,7 @@ async function main() {
     { page: harness('demo-confirmation.html', '#overlay'), state: 'results', out: asset('screenshot-1-overlay.png'), width: 1280, height: 800 },
     { page: harness('demo-posting.html', '#popup'), state: 'posting-found', out: asset('screenshot-2-popup.png'), width: 1280, height: 800 },
     { page: url('options.html'), state: 'settings', out: asset('screenshot-3-settings.png'), width: 1280, height: 800 },
+    { page: harness('demo-confirmation.html', '#overlay'), state: 'prompt', out: asset('screenshot-4-prompt.png'), width: 1280, height: 800 },
   ];
   for (const s of store) await shot(s);
   toRgb(store.map(s => s.out));
