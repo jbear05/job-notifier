@@ -1,5 +1,6 @@
-let currentMatches = [];
-let currentJob = null;
+let current = null;         // { job, message, suggestedGroupId, groups }
+let selectedGroupId = null;
+let excluded = new Set();   // friends unticked in the selected group, by index
 let recruiterUrl = ""; // optional, local only: never sent to Claude
 
 document.addEventListener("DOMContentLoaded", init);
@@ -13,8 +14,11 @@ async function init() {
   document.getElementById("settings-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
   document.getElementById("error-settings-btn").addEventListener("click", () => chrome.runtime.openOptionsPage());
   document.getElementById("manual-analyze-btn").addEventListener("click", onAnalyzeClick);
-  document.getElementById("send-all-btn").addEventListener("click", sendNext);
-  document.getElementById("copy-all-btn").addEventListener("click", copyAll);
+  document.getElementById("email-btn").addEventListener("click", emailGroup);
+  document.getElementById("copy-btn").addEventListener("click", copyMessage);
+  document.getElementById("message-box").addEventListener("input", e => { current.message = e.target.value; });
+  document.getElementById("group-chips").addEventListener("click", onChipClick);
+  document.getElementById("member-list").addEventListener("change", onMemberToggle);
   document.getElementById("recruiter-input").addEventListener("input", updateRecruiter);
 
   const { settings } = await chrome.storage.local.get("settings");
@@ -37,7 +41,7 @@ async function init() {
     if (chrome.runtime.lastError || !response) {
       showInput("Couldn't read this page. Paste the job posting text below:");
     } else if (response.isJobPage) {
-      showInput("Found a job posting on this page. Check the text, then find matches:", response.text);
+      showInput("Found a job posting on this page. Check the text, then draft a message:", response.text);
     } else {
       showInput("This doesn't look like a job posting. Paste the job text below:");
     }
@@ -54,9 +58,7 @@ async function onAnalyzeClick() {
   showState("loading");
 
   try {
-    const result = await analyzeViaBackground(text);
-    currentJob = result.job;
-    currentMatches = result.matches || [];
+    current = await analyzeViaBackground(text);
     renderResults();
   } catch (e) {
     if (e.message === "NO_API_KEY") showError("Add your Anthropic API key in settings to get started.", true);
@@ -83,12 +85,9 @@ function analyzeViaBackground(jobText) {
 
 // ── Results ──
 
-const sent = new Set();
-
 function renderResults() {
   showState("results");
-  sent.clear();
-  const job = currentJob || {};
+  const job = current.job || {};
   const esc = JN.escHtml;
 
   document.getElementById("job-card").innerHTML = `
@@ -102,82 +101,70 @@ function renderResults() {
     ${job.skills?.length ? `<div class="job-skills">${job.skills.map(s => `<span class="skill">${esc(s)}</span>`).join("")}</div>` : ""}
   `;
 
-  const matchList = document.getElementById("match-list");
-  const count = currentMatches.length;
-  document.getElementById("empty-state").hidden = count > 0;
-  document.getElementById("bulk-actions").hidden = count < 2;
-  document.getElementById("bulk-hint").hidden = count < 2;
-  document.getElementById("recruiter").hidden = count === 0;
+  document.getElementById("message-box").value = current.message;
   document.getElementById("recruiter-input").value = "";
   updateRecruiter();
+  document.getElementById("group-hint").textContent = current.suggestedGroupId
+    ? "Claude's pick is highlighted. Tap another group to switch."
+    : "No group was a clear fit. Pick one:";
+  selectGroup(current.suggestedGroupId);
+}
 
-  matchList.innerHTML = currentMatches.map((m, i) => `
-    <div class="match-card" data-index="${i}">
-      <div class="match-header">
-        <label class="match-select">
-          <input type="checkbox" class="friend-checkbox" data-index="${i}" checked>
-          <span class="match-name">${esc(m.name)}</span>
-        </label>
-        <span class="match-score" title="Relevance score">${Math.round(m.score * 100)}% match</span>
-      </div>
-      <textarea class="message-box" rows="4" data-index="${i}">${esc(m.message)}</textarea>
-      <div class="card-actions">
-        <button class="send-btn" data-index="${i}">Send</button>
-        <button class="copy-btn" data-index="${i}">Copy</button>
-      </div>
-    </div>
+function selectGroup(id) {
+  selectedGroupId = id;
+  excluded = new Set();
+  const esc = JN.escHtml;
+  document.getElementById("group-chips").innerHTML = current.groups.map(g => `
+    <button type="button" class="group-chip" role="radio" data-id="${esc(g.id)}"
+            aria-checked="${g.id === id}">${esc(g.name)}${g.id === current.suggestedGroupId ? '<span class="suggested">★</span>' : ""}</button>
   `).join("");
 
-  matchList.querySelectorAll("textarea").forEach(ta => {
-    ta.addEventListener("input", e => {
-      currentMatches[parseInt(e.target.dataset.index)].message = e.target.value;
-    });
-  });
-  matchList.querySelectorAll(".send-btn").forEach(btn => {
-    btn.addEventListener("click", e => {
-      send(parseInt(e.target.dataset.index));
-      flashButton(e.target, "Opened!");
-    });
-  });
-  matchList.querySelectorAll(".copy-btn").forEach(btn => {
-    btn.addEventListener("click", async e => {
-      const m = currentMatches[parseInt(e.target.dataset.index)];
-      await copyToClipboard(JN.withRecruiter(m.message, recruiterUrl));
-      flashButton(e.target, "Copied!");
-    });
-  });
-  matchList.querySelectorAll(".friend-checkbox").forEach(cb => cb.addEventListener("change", updateSendAll));
-
-  updateSendAll();
+  const group = selectedGroup();
+  document.getElementById("member-list").innerHTML = group ? group.members.map((m, i) => `
+    <li><label>
+      <input type="checkbox" data-index="${i}" ${m.contact ? "checked" : "disabled"}>
+      <span class="member-name">${esc(m.name)}</span>
+      <span class="member-contact">${esc(m.contact || "no email")}</span>
+    </label></li>
+  `).join("") : "";
+  updateEmailButton();
 }
 
-function checkedIndexes() {
-  return [...document.querySelectorAll(".friend-checkbox:checked")].map(cb => parseInt(cb.dataset.index));
+function selectedGroup() {
+  return current.groups.find(g => g.id === selectedGroupId) || null;
 }
 
-function send(i) {
-  window.open(JN.mailtoUrl(currentMatches[i], currentJob, recruiterUrl));
-  sent.add(i);
-  updateSendAll();
+function recipients() {
+  const group = selectedGroup();
+  return group ? group.members.filter((m, i) => m.contact && !excluded.has(i)) : [];
 }
 
-// Browsers block all but the first window.open per click, so "send all"
-// opens one checked email per click instead of firing them all at once.
-function sendNext() {
-  const next = checkedIndexes().find(i => !sent.has(i));
-  if (next !== undefined) send(next);
+function onChipClick(e) {
+  const chip = e.target.closest(".group-chip");
+  if (chip) selectGroup(chip.dataset.id);
 }
 
-function updateSendAll() {
-  const btn = document.getElementById("send-all-btn");
-  const left = checkedIndexes().filter(i => !sent.has(i)).length;
-  btn.textContent = left ? `Open next email (${left} left)` : "All checked emails opened";
-  btn.disabled = !left;
+function onMemberToggle(e) {
+  const i = parseInt(e.target.dataset.index);
+  e.target.checked ? excluded.delete(i) : excluded.add(i);
+  updateEmailButton();
 }
 
-async function copyAll(e) {
-  const selected = checkedIndexes().map(i => currentMatches[i]);
-  await copyToClipboard(JN.combinedMessages(selected, currentJob, recruiterUrl));
+function updateEmailButton() {
+  const btn = document.getElementById("email-btn");
+  const n = recipients().length;
+  btn.disabled = !n;
+  btn.textContent = !selectedGroup() ? "Pick a group"
+    : n ? `Email ${n} friend${n === 1 ? "" : "s"}` : "No one to email";
+}
+
+function emailGroup(e) {
+  window.open(JN.groupMailtoUrl(recipients(), current.job, current.message, recruiterUrl));
+  flashButton(e.target, "Opened!");
+}
+
+async function copyMessage(e) {
+  await copyToClipboard(JN.shareText(current.job, current.message, recruiterUrl));
   flashButton(e.target, "Copied!");
 }
 
@@ -191,7 +178,7 @@ function updateRecruiter() {
   status.className = `recruiter-status ${bad ? "bad" : url ? "ok" : ""}`;
   status.textContent = bad
     ? "That doesn't look like a LinkedIn link, so it won't be included."
-    : url ? "Added to your emails." : "";
+    : url ? "Added to your email." : "";
 }
 
 // ── UI helpers ──
@@ -235,6 +222,6 @@ function flashButton(btn, label) {
   setTimeout(() => {
     btn.textContent = original;
     btn.disabled = false;
-    if (btn.id === "send-all-btn") updateSendAll();
+    if (btn.id === "email-btn") updateEmailButton();
   }, 1500);
 }

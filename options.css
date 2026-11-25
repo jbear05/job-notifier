@@ -30,7 +30,7 @@ textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.
 input:focus, select:focus, textarea:focus { outline: none; border-color: #5b5bd6; }
 .help { color: #777; font-size: 12.5px; margin: 6px 0 14px; line-height: 1.5; }
 .help code, .lede code { background: #f0f0f5; padding: 1px 4px; border-radius: 3px; }
-.row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 14px; }
 @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
 .check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 .actions { display: flex; align-items: center; gap: 12px; }
@@ -49,3 +49,31 @@ button:hover { background: #4a4abf; }
 #status.error { color: #c0392b; }
 #status.ok { color: #15622f; }
 a { color: #5b5bd6; }
+
+/* ── Groups & friends ── */
+ul.group-list, ul.friend-list { list-style: none; margin: 0 0 12px; padding: 0; }
+li.empty, .muted { color: #999; font-size: 13px; }
+li.empty { padding: 6px 0; }
+.group-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.group-row .group-name { flex: 1; }
+.count { color: #777; font-size: 12.5px; white-space: nowrap; min-width: 64px; }
+.friend-row { border: 1px solid #eee; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.friend-fields { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 8px; align-items: center; }
+@media (max-width: 560px) { .friend-fields { grid-template-columns: 1fr; } }
+input[type="email"] {
+  width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; font: inherit; background: #fff;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+button.chip {
+  padding: 4px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 500;
+  background: #fff; color: #555; border: 1px solid #ddd;
+}
+button.chip:hover { background: #f4f4fb; }
+button.chip[aria-pressed="true"] { background: #5b5bd6; border-color: #5b5bd6; color: #fff; }
+.add-row { display: flex; gap: 8px; }
+.add-row input { flex: 1; }
+button.secondary { background: #eeeeff; color: #3b3ba8; padding: 8px 16px; }
+button.secondary:hover { background: #e2e2fb; }
+button.link-btn { background: none; padding: 4px 6px; font-weight: 500; font-size: 13px; color: #5b5bd6; }
+button.link-btn:hover { background: none; text-decoration: underline; }
+button.link-btn.danger { color: #c0392b; }

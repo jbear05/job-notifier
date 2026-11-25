@@ -3,8 +3,7 @@
 // and Claude is only called on a confirmation page that follows one.
 
 let overlayShown = false;
-let currentMatches = [];
-let currentJob = null;
+let current = null; // { job, message, suggestedGroupId, groups }
 let recruiterUrl = ''; // optional, local only: never sent to Claude
 let checkTimer = null;
 let lastUrl = location.href;
@@ -103,8 +102,7 @@ function triggerAutoAnalysis() {
       else renderOverlayError(response.error || 'Analysis failed.');
       return;
     }
-    currentJob = response.result.job;
-    currentMatches = response.result.matches || [];
+    current = response.result;
     recruiterUrl = '';
     renderOverlayResults();
   });
@@ -229,44 +227,30 @@ function injectStyles() {
       padding: 3px 8px; font-size: 11px; font-weight: 500;
     }
 
-    /* ── Match cards ── */
-    .jn-match-card {
-      background: #fafafa; border: 1.5px solid #f0f0f0; border-radius: 12px;
-      padding: 14px 16px; margin-bottom: 10px;
-      transition: border-color 0.15s, box-shadow 0.15s;
+    /* ── Group picker ── */
+    .jn-label { display: block; font-weight: 600; font-size: 12.5px; color: #333; margin-bottom: 6px; }
+    .jn-group-hint { color: #999; font-size: 11.5px; margin: -2px 0 8px; }
+    .jn-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .jn-chip {
+      padding: 5px 12px; border-radius: 999px; border: 1.5px solid #e0e0e0;
+      background: #fff; color: #444; font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
     }
-    .jn-match-card:hover { border-color: #d8d8f5; box-shadow: 0 2px 10px rgba(91,91,214,0.08); }
-    .jn-match-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .jn-match-select { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-    .jn-match-select input[type="checkbox"] { width: 16px; height: 16px; accent-color: #5b5bd6; cursor: pointer; flex-shrink: 0; }
-    .jn-avatar {
-      width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
-      background: linear-gradient(135deg, #5b5bd6, #7c3aed);
-      color: #fff; font-weight: 700; font-size: 13px;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .jn-match-name { font-weight: 600; font-size: 13px; color: #111; }
-    .jn-match-score {
-      font-size: 11px; font-weight: 700; color: #5b5bd6;
-      background: #eeeeff; padding: 3px 9px; border-radius: 20px;
-      white-space: nowrap;
-    }
+    .jn-chip:hover { background: #f4f4fb; }
+    .jn-chip[aria-checked="true"] { background: #5b5bd6; border-color: #5b5bd6; color: #fff; }
+    .jn-chip .jn-star { font-size: 10.5px; opacity: 0.8; margin-left: 4px; }
+    .jn-members { list-style: none; margin-bottom: 14px; max-height: 150px; overflow-y: auto; }
+    .jn-members label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+    .jn-members input { width: 15px; height: 15px; accent-color: #5b5bd6; }
+    .jn-member-name { font-weight: 600; font-size: 12.5px; }
+    .jn-member-contact { color: #999; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .jn-message-box {
+      margin-bottom: 14px !important;
       width: 100%; border: 1.5px solid #ebebeb; border-radius: 8px;
       padding: 9px 11px; font-family: inherit; font-size: 12.5px;
       color: #222; line-height: 1.55; resize: vertical;
       background: #fff; outline: none; transition: border-color 0.15s;
     }
     .jn-message-box:focus { border-color: #5b5bd6; }
-    .jn-card-actions { display: flex; gap: 8px; margin-top: 10px; }
-    .jn-send-btn {
-      flex: 1; padding: 8px 0; background: #5b5bd6; color: #fff;
-      border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
-      cursor: pointer; transition: background 0.15s, transform 0.1s;
-    }
-    .jn-send-btn:hover { background: #4a4abf; }
-    .jn-send-btn:active { transform: scale(0.98); }
-    .jn-send-btn:disabled { opacity: 0.55; cursor: default; }
     .jn-copy-btn {
       padding: 8px 16px; background: transparent;
       border: 1.5px solid #e0e0e0; border-radius: 8px;
@@ -358,7 +342,7 @@ function showOverlayLoading() {
     <div class="jn-loading">
       <div class="jn-spinner"></div>
       <div>
-        <div class="jn-loading-label">Finding matches…</div>
+        <div class="jn-loading-label">Drafting a message…</div>
         <div class="jn-loading-sub">Analyzing the job posting you just applied to</div>
       </div>
     </div>
@@ -369,11 +353,10 @@ function renderOverlayResults() {
   const modal = document.getElementById('jn-modal');
   if (!modal) return;
 
-  const job = currentJob || {};
-  const count = currentMatches.length;
-
+  const job = current.job || {};
+  const suggested = current.groups.find(g => g.id === current.suggestedGroupId);
   modal.querySelector('.jn-subtitle').textContent =
-    count ? `${count} match${count > 1 ? 'es' : ''} found` : 'No matches found';
+    suggested ? `Suggested group: ${suggested.name}` : 'Pick a group to share with';
 
   const jobHtml = `
     <div class="jn-job-card">
@@ -388,116 +371,101 @@ function renderOverlayResults() {
     </div>
   `;
 
-  const matchesHtml = count
-    ? currentMatches.map((m, i) => `
-      <div class="jn-match-card">
-        <div class="jn-match-header">
-          <label class="jn-match-select">
-            <input type="checkbox" class="jn-checkbox" data-index="${i}" checked>
-            <div class="jn-avatar">${esc((m.name || '?')[0].toUpperCase())}</div>
-            <span class="jn-match-name">${esc(m.name)}</span>
-          </label>
-          <span class="jn-match-score">${Math.round(m.score * 100)}% match</span>
-        </div>
-        <textarea class="jn-message-box" rows="3" data-index="${i}">${esc(m.message)}</textarea>
-        <div class="jn-card-actions">
-          <button class="jn-send-btn" data-index="${i}">Send email</button>
-          <button class="jn-copy-btn" data-index="${i}">Copy</button>
-        </div>
-      </div>
-    `).join('')
-    : `<div class="jn-empty">No strong matches for this posting.</div>`;
-
-  const recruiterHtml = count
-    ? `<div class="jn-recruiter">
-         <label class="jn-recruiter-label" for="jn-recruiter-input">Do you have a recruiter contact for this position?</label>
-         <div class="jn-recruiter-sub">Optional. Paste their LinkedIn and it's added to each email and to Copy all.</div>
-         <input id="jn-recruiter-input" class="jn-recruiter-input" type="url" inputmode="url" autocomplete="off"
-                placeholder="https://www.linkedin.com/in/…" value="${esc(recruiterUrl)}">
-         <div class="jn-recruiter-status" aria-live="polite"></div>
-       </div>`
-    : '';
-
-  const bulkHtml = count > 1
-    ? `<div class="jn-bulk-actions">
-         <button class="jn-send-all-btn">Open next email</button>
-         <button class="jn-copy-btn jn-copy-all-btn">Copy all</button>
-       </div>
-       <div class="jn-hint">Browsers only allow one email window per click, so this opens the checked emails one at a time.</div>`
-    : '';
+  const shareHtml = `
+    <div class="jn-label">Share with</div>
+    <div class="jn-group-hint">${suggested ? "Claude's pick is highlighted. Tap another group to switch." : 'No group was a clear fit. Pick one:'}</div>
+    <div class="jn-chips" role="radiogroup" aria-label="Group"></div>
+    <ul class="jn-members"></ul>
+    <label class="jn-label" for="jn-message">Message</label>
+    <textarea id="jn-message" class="jn-message-box" rows="4">${esc(current.message)}</textarea>
+    <div class="jn-recruiter">
+      <label class="jn-recruiter-label" for="jn-recruiter-input">Do you have a recruiter contact for this position?</label>
+      <div class="jn-recruiter-sub">Optional. Paste their LinkedIn and it's added to the email and to Copy.</div>
+      <input id="jn-recruiter-input" class="jn-recruiter-input" type="url" inputmode="url" autocomplete="off"
+             placeholder="https://www.linkedin.com/in/…" value="${esc(recruiterUrl)}">
+      <div class="jn-recruiter-status" aria-live="polite"></div>
+    </div>
+    <div class="jn-bulk-actions">
+      <button class="jn-send-all-btn jn-email-btn">Email group</button>
+      <button class="jn-copy-btn jn-copy-msg-btn">Copy</button>
+    </div>
+    <div class="jn-hint">Opens one email with your friends in Bcc, so they don't see each other's addresses.</div>
+  `;
 
   const body = modal.querySelector('.jn-body');
-  body.innerHTML = jobHtml + recruiterHtml + matchesHtml + bulkHtml;
+  body.innerHTML = jobHtml + shareHtml;
+
+  const chips = body.querySelector('.jn-chips');
+  const memberList = body.querySelector('.jn-members');
+  const emailBtn = body.querySelector('.jn-email-btn');
+  let selectedId = null;
+  let excluded = new Set();
+
+  const selectedGroup = () => current.groups.find(g => g.id === selectedId) || null;
+  const recipients = () => {
+    const g = selectedGroup();
+    return g ? g.members.filter((m, i) => m.contact && !excluded.has(i)) : [];
+  };
+  function updateEmailBtn() {
+    const n = recipients().length;
+    emailBtn.disabled = !n;
+    emailBtn.textContent = !selectedGroup() ? 'Pick a group'
+      : n ? `Email ${n} friend${n === 1 ? '' : 's'}` : 'No one to email';
+  }
+  function selectGroup(id) {
+    selectedId = id;
+    excluded = new Set();
+    chips.innerHTML = current.groups.map(g => `
+      <button type="button" class="jn-chip" role="radio" data-id="${esc(g.id)}" aria-checked="${g.id === id}">${esc(g.name)}${
+        g.id === current.suggestedGroupId ? '<span class="jn-star">★</span>' : ''}</button>
+    `).join('');
+    const g = selectedGroup();
+    memberList.innerHTML = g ? g.members.map((m, i) => `
+      <li><label>
+        <input type="checkbox" class="jn-member-cb" data-index="${i}" ${m.contact ? 'checked' : 'disabled'}>
+        <span class="jn-member-name">${esc(m.name)}</span>
+        <span class="jn-member-contact">${esc(m.contact || 'no email')}</span>
+      </label></li>
+    `).join('') : '';
+    updateEmailBtn();
+  }
+
+  chips.addEventListener('click', e => {
+    const chip = e.target.closest('.jn-chip');
+    if (chip) selectGroup(chip.dataset.id);
+  });
+  memberList.addEventListener('change', e => {
+    const i = parseInt(e.target.dataset.index);
+    e.target.checked ? excluded.delete(i) : excluded.add(i);
+    updateEmailBtn();
+  });
+  body.querySelector('#jn-message').addEventListener('input', e => { current.message = e.target.value; });
 
   const recruiterInput = body.querySelector('.jn-recruiter-input');
   const recruiterStatus = body.querySelector('.jn-recruiter-status');
   function updateRecruiter() {
-    const raw = recruiterInput.value;
-    const url = JN.normalizeRecruiterUrl(raw);
+    const url = JN.normalizeRecruiterUrl(recruiterInput.value);
     recruiterUrl = url || '';
     const bad = url === null;
     recruiterInput.classList.toggle('jn-invalid', bad);
     recruiterStatus.className = `jn-recruiter-status ${bad ? 'jn-bad' : url ? 'jn-ok' : ''}`;
     recruiterStatus.textContent = bad
       ? "That doesn't look like a LinkedIn link, so it won't be included."
-      : url ? 'Added to your emails.' : '';
+      : url ? 'Added to your email.' : '';
   }
-  recruiterInput?.addEventListener('input', updateRecruiter);
-  if (recruiterInput) updateRecruiter();
+  recruiterInput.addEventListener('input', updateRecruiter);
+  updateRecruiter();
 
-  body.querySelectorAll('.jn-message-box').forEach(ta => {
-    ta.addEventListener('input', e => {
-      currentMatches[parseInt(e.target.dataset.index)].message = e.target.value;
-    });
+  emailBtn.addEventListener('click', () => {
+    window.open(JN.groupMailtoUrl(recipients(), current.job, current.message, recruiterUrl));
+    flashBtn(emailBtn, 'Opened!', updateEmailBtn);
   });
-
-  const sent = new Set();
-  const sendAllBtn = body.querySelector('.jn-send-all-btn');
-
-  function checkedIndexes() {
-    return [...body.querySelectorAll('.jn-checkbox:checked')].map(cb => parseInt(cb.dataset.index));
-  }
-  function updateSendAll() {
-    if (!sendAllBtn) return;
-    const left = checkedIndexes().filter(i => !sent.has(i)).length;
-    sendAllBtn.textContent = left ? `Open next email (${left} left)` : 'All checked emails opened';
-    sendAllBtn.disabled = !left;
-  }
-  function send(i) {
-    window.open(JN.mailtoUrl(currentMatches[i], currentJob, recruiterUrl));
-    sent.add(i);
-    updateSendAll();
-  }
-
-  body.querySelectorAll('.jn-send-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
-      send(parseInt(e.target.dataset.index));
-      flashBtn(e.target, 'Opened!');
-    });
-  });
-
-  body.querySelectorAll('.jn-card-actions .jn-copy-btn').forEach(btn => {
-    btn.addEventListener('click', async e => {
-      const m = currentMatches[parseInt(e.target.dataset.index)];
-      await navigator.clipboard.writeText(JN.withRecruiter(m.message, recruiterUrl)).catch(() => {});
-      flashBtn(e.target, 'Copied!');
-    });
-  });
-
-  body.querySelectorAll('.jn-checkbox').forEach(cb => cb.addEventListener('change', updateSendAll));
-
-  sendAllBtn?.addEventListener('click', () => {
-    const next = checkedIndexes().find(i => !sent.has(i));
-    if (next !== undefined) send(next);
-  });
-
-  body.querySelector('.jn-copy-all-btn')?.addEventListener('click', async e => {
-    const selected = checkedIndexes().map(i => currentMatches[i]);
-    await navigator.clipboard.writeText(JN.combinedMessages(selected, currentJob, recruiterUrl)).catch(() => {});
+  body.querySelector('.jn-copy-msg-btn').addEventListener('click', async e => {
+    await navigator.clipboard.writeText(JN.shareText(current.job, current.message, recruiterUrl)).catch(() => {});
     flashBtn(e.target, 'Copied!');
   });
 
-  updateSendAll();
+  selectGroup(current.suggestedGroupId);
 }
 
 function renderOverlayError(msg) {
@@ -516,7 +484,7 @@ function renderSetupNeeded() {
   const body = document.querySelector('#jn-modal .jn-body');
   body.innerHTML = `
     <div class="jn-error-wrap">
-      <div class="jn-error-msg" style="color:#444">Add your Anthropic API key in the extension settings to get friend matches for jobs you apply to.</div>
+      <div class="jn-error-msg" style="color:#444">Add your Anthropic API key in the extension settings to share jobs you apply to with your friend groups.</div>
       <button class="jn-link-btn">Open settings</button>
     </div>
   `;
@@ -525,11 +493,15 @@ function renderSetupNeeded() {
   });
 }
 
-function flashBtn(btn, label) {
+function flashBtn(btn, label, after) {
   const orig = btn.textContent;
   btn.textContent = label;
   btn.disabled = true;
-  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
+  setTimeout(() => {
+    btn.textContent = orig;
+    btn.disabled = false;
+    if (after) after();
+  }, 1500);
 }
 
 // ── Popup support ──

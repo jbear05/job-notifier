@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Job Notifier",
-  "version": "1.1.0",
-  "description": "When you apply to a job, drafts personalized messages for friends who'd be a good fit.",
+  "version": "1.2.0",
+  "description": "When you apply to a job, suggests which friend group to share it with and drafts the email.",
   "permissions": [
     "storage",
     "clipboardWrite"

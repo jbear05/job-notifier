@@ -9,16 +9,15 @@ async function getSettings() {
   return settings;
 }
 
-async function getFriends() {
-  const { friends } = await chrome.storage.local.get('friends');
-  if (Array.isArray(friends)) return friends;
-  // First run: fall back to the bundled example list.
-  try {
-    const resp = await fetch(chrome.runtime.getURL('friends.json'));
-    return await resp.json();
-  } catch (e) {
-    return [];
+// Groups and friends. Older friend lists (before groups) are migrated into an
+// "Everyone" group the first time they're read, and saved back.
+async function getStore() {
+  const data = await chrome.storage.local.get(['friends', 'groups']);
+  const store = JN.normalizeStore(data);
+  if (Array.isArray(data.friends) && !Array.isArray(data.groups)) {
+    await chrome.storage.local.set(store);
   }
+  return store;
 }
 
 // ── Recently viewed job postings ──
@@ -65,22 +64,23 @@ chrome.tabs.onRemoved.addListener(async tabId => {
 async function analyze(jobText) {
   const settings = await getSettings();
   if (!settings.apiKey) throw new Error('NO_API_KEY');
-  const friends = await getFriends();
-  if (!JN.activeFriends(friends).length) throw new Error('Your friends list is empty. Add friends on the settings page.');
+  const store = await getStore();
+  if (!JN.shareableGroups(store).length) throw new Error('None of your groups have friends in them yet. Add some on the settings page.');
 
-  const req = JN.buildRequest(jobText, friends, settings);
+  const req = JN.buildRequest(jobText, store, settings);
   const response = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.error?.message || `API error ${response.status}`);
   }
-  return JN.parseResponse(await response.json(), friends, settings.threshold);
+  return JN.parseResponse(await response.json(), store);
 }
 
 // ── Messaging ──
 
 chrome.runtime.onInstalled.addListener(details => {
   if (details.reason === 'install') chrome.runtime.openOptionsPage();
+  if (details.reason === 'update') getStore().catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

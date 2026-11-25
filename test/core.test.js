@@ -57,28 +57,71 @@ test('isFresh respects the TTL', () => {
   assert.equal(JN.isFresh(null, now), false);
 });
 
-const FRIENDS = [
-  { name: 'Alex', contact: 'alex@example.com', skills: ['Python'], interests: ['fintech'], level: 'internship' },
-  { name: 'Sam', contact: 'sam@example.com', skills: ['Go'], notify: false },
-  { name: 'Riley', contact: 'riley@example.com', skills: ['React'] },
-];
+const STORE = {
+  groups: [{ id: 'sw', name: 'Software' }, { id: 'empty', name: 'Law' }, { id: 'cy', name: 'Cyber' }],
+  friends: [
+    { id: 'a', name: 'Alex', contact: 'alex@example.com', groups: ['sw'] },
+    { id: 'r', name: 'Riley', contact: 'riley@example.com', groups: ['sw', 'cy'] },
+    { id: 'n', name: 'Noemail', contact: '', groups: ['cy'] },
+  ],
+};
 
-test('prompt friends exclude contacts and opted-out friends', () => {
-  const pf = JN.friendsForPrompt(FRIENDS);
-  assert.deepEqual(pf.map(f => f.name), ['Alex', 'Riley']);
-  assert.deepEqual(pf.map(f => f.id), [0, 1]);
-  assert.ok(pf.every(f => !('contact' in f)));
-  const req = JN.buildRequest('job text', FRIENDS, { apiKey: 'sk-ant-test' });
-  assert.ok(!JSON.stringify(req.body).includes('@example.com'));
+test('legacy friends lists migrate into an Everyone group', () => {
+  const legacy = {
+    friends: [
+      { name: 'Alex', contact: 'alex@example.com', skills: ['Python'], interests: ['fintech'], level: 'internship' },
+      { name: 'Sam', contact: 'sam@example.com', notify: false },
+      { name: '  ' },
+    ],
+  };
+  const out = JN.normalizeStore(legacy);
+  assert.deepEqual(out.groups, [{ id: 'everyone', name: 'Everyone' }]);
+  assert.deepEqual(out.friends.map(f => [f.name, f.contact, f.groups]), [
+    ['Alex', 'alex@example.com', ['everyone']],
+    ['Sam', 'sam@example.com', []],
+  ]);
+  assert.ok(!('skills' in out.friends[0]));
+  // Deterministic, so the options page and background agree.
+  assert.deepEqual(JN.normalizeStore(legacy), out);
+  // Already migrated data is left alone.
+  assert.deepEqual(JN.normalizeStore(out), out);
+});
+
+test('normalizeStore handles first run, empty lists and stale group ids', () => {
+  assert.deepEqual(JN.normalizeStore({}), JN.EXAMPLE_STORE);
+  assert.deepEqual(JN.normalizeStore({ friends: [] }), { groups: [], friends: [] });
+  const out = JN.normalizeStore({
+    groups: [{ id: 'sw', name: ' Software ' }, { id: 'x', name: '' }],
+    friends: [{ id: 'a', name: 'Alex', groups: ['sw', 'gone', 'sw'] }],
+  });
+  assert.deepEqual(out.groups, [{ id: 'sw', name: 'Software' }]);
+  assert.deepEqual(out.friends[0].groups, ['sw']);
+});
+
+test('validateStore catches common mistakes', () => {
+  assert.equal(JN.validateStore(STORE), null);
+  assert.match(JN.validateStore({ groups: [{ id: 'a', name: 'X' }, { id: 'b', name: 'x' }], friends: [] }), /two groups/);
+  assert.match(JN.validateStore({ groups: [{ id: 'a', name: ' ' }], friends: [] }), /name/);
+  assert.match(JN.validateStore({ groups: [], friends: [{ name: '' }] }), /name/);
+  assert.match(JN.validateStore({ groups: [], friends: [{ name: 'A', contact: 'not-an-email' }] }), /email/);
+});
+
+test('Claude only sees non-empty group names, never friend data', () => {
+  assert.deepEqual(JN.groupsForPrompt(STORE), [{ id: 0, name: 'Software' }, { id: 1, name: 'Cyber' }]);
+  const req = JN.buildRequest('job text', STORE, { apiKey: 'sk-ant-test' });
+  const sent = JSON.stringify(req.body);
+  for (const secret of ['@example.com', 'Alex', 'Riley', 'Law']) assert.ok(!sent.includes(secret), secret);
+  assert.ok(sent.includes('Software') && sent.includes('Cyber'));
 });
 
 test('buildRequest uses structured output and fallbacks on supported models', () => {
-  const req = JN.buildRequest('job', FRIENDS, { apiKey: 'sk-ant-test', model: 'claude-opus-5-5' });
+  const req = JN.buildRequest('job', STORE, { apiKey: 'sk-ant-test', model: 'claude-opus-5-5' });
   assert.equal(req.body.output_config.format.type, 'json_schema');
+  assert.deepEqual(req.body.output_config.format.schema.required, ['job', 'group', 'message']);
   assert.equal(req.body.fallbacks, 'default');
   assert.equal(req.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
 
-  const haiku = JN.buildRequest('job', FRIENDS, { apiKey: 'k', model: 'claude-haiku-5-5' });
+  const haiku = JN.buildRequest('job', STORE, { apiKey: 'k', model: 'claude-haiku-5-5' });
   assert.equal(haiku.body.fallbacks, undefined);
   assert.equal(haiku.headers['anthropic-beta'], undefined);
 });
@@ -87,40 +130,41 @@ function apiResponse(obj, extra = {}) {
   return { stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: JSON.stringify(obj) }], ...extra };
 }
 
-test('parseResponse maps ids back to friends with contacts, sorted by score', () => {
-  const out = JN.parseResponse(apiResponse({
-    job: { title: 'Intern', company: 'Acme', skills: [], level: '', location: '', remote: false },
-    matches: [
-      { id: 1, score: 0.7, message: 'Hey Riley' },
-      { id: 0, score: 0.9, message: 'Hey Alex' },
-      { id: 0, score: 0.95, message: 'duplicate' },
-      { id: 7, score: 0.9, message: 'unknown id' },
-      { id: 1, score: 0.2, message: 'below threshold' },
-    ],
-  }), FRIENDS, 0.6);
-  assert.deepEqual(out.matches.map(m => [m.name, m.contact]), [['Alex', 'alex@example.com'], ['Riley', 'riley@example.com']]);
+const JOB = { title: 'Intern', company: 'Acme', skills: [], level: '', location: '', remote: false };
+
+test('parseResponse maps the group back and attaches members locally', () => {
+  const out = JN.parseResponse(apiResponse({ job: JOB, group: 1, message: 'Hey all' }), STORE);
+  assert.equal(out.suggestedGroupId, 'cy');
+  assert.equal(out.message, 'Hey all');
   assert.equal(out.job.company, 'Acme');
+  assert.deepEqual(out.groups.map(g => g.id), ['sw', 'cy']);
+  assert.deepEqual(out.groups[0].members, [
+    { name: 'Alex', contact: 'alex@example.com' },
+    { name: 'Riley', contact: 'riley@example.com' },
+  ]);
+});
+
+test('parseResponse treats -1 or unknown ids as no suggestion', () => {
+  for (const group of [-1, 2, 99]) {
+    const out = JN.parseResponse(apiResponse({ job: JOB, group, message: 'x' }), STORE);
+    assert.equal(out.suggestedGroupId, null, String(group));
+    assert.equal(out.groups.length, 2);
+  }
 });
 
 test('parseResponse surfaces refusals, truncation and bad JSON', () => {
-  assert.throws(() => JN.parseResponse({ stop_reason: 'refusal', content: [] }, FRIENDS), /declined/);
-  assert.throws(() => JN.parseResponse({ stop_reason: 'max_tokens', content: [] }, FRIENDS), /cut off/);
-  assert.throws(() => JN.parseResponse({ stop_reason: 'end_turn', content: [{ type: 'text', text: '{oops' }] }, FRIENDS), /malformed/);
+  assert.throws(() => JN.parseResponse({ stop_reason: 'refusal', content: [] }, STORE), /declined/);
+  assert.throws(() => JN.parseResponse({ stop_reason: 'max_tokens', content: [] }, STORE), /cut off/);
+  assert.throws(() => JN.parseResponse({ stop_reason: 'end_turn', content: [{ type: 'text', text: '{oops' }] }, STORE), /malformed/);
 });
 
-test('validateFriends catches common mistakes', () => {
-  assert.equal(JN.validateFriends(FRIENDS), null);
-  assert.match(JN.validateFriends({}), /array/);
-  assert.match(JN.validateFriends([{ skills: [] }]), /name/);
-  assert.match(JN.validateFriends([{ name: 'A', skills: 'Python' }]), /skills/);
-});
-
-test('mailto and combined messages encode correctly', () => {
+test('group mailto uses To for one friend and Bcc for several', () => {
   const job = { title: 'Intern', company: 'Acme & Co' };
-  const url = JN.mailtoUrl({ contact: 'a@b.com', message: 'Hi there' }, job);
-  assert.equal(url, 'mailto:a%40b.com?subject=Job%20opportunity%3A%20Intern%20at%20Acme%20%26%20Co&body=Hi%20there');
-  const combined = JN.combinedMessages([{ name: 'Alex', contact: 'a@b.com', message: 'Hi' }], job);
-  assert.match(combined, /To Alex <a@b.com>:\nHi/);
+  const one = JN.groupMailtoUrl([{ contact: 'a@b.com' }], job, 'Hi there');
+  assert.equal(one, 'mailto:a%40b.com?subject=Job%20opportunity%3A%20Intern%20at%20Acme%20%26%20Co&body=Hi%20there');
+  const many = JN.groupMailtoUrl([{ contact: 'a@b.com' }, { contact: '' }, { contact: 'c@d.com' }], job, 'Hi');
+  assert.ok(many.startsWith('mailto:?bcc=a%40b.com,c%40d.com&subject='));
+  assert.equal(JN.shareText(job, 'Hi'), 'Job opportunity: Intern at Acme & Co\n\nHi');
 });
 
 test('escHtml escapes markup', () => {
@@ -147,19 +191,16 @@ test('normalizeRecruiterUrl accepts LinkedIn links loosely and rejects others', 
   }
 });
 
-test('recruiter link is added to emails and copied text only when given', () => {
+test('recruiter link is added to the email and copied text only when given', () => {
   const job = { title: 'Intern', company: 'Acme' };
-  const match = { name: 'Alex', contact: 'a@b.com', message: 'Hi' };
+  const members = [{ name: 'Alex', contact: 'a@b.com' }];
   const rec = 'https://www.linkedin.com/in/jane/';
 
-  assert.equal(JN.mailtoUrl(match, job, ''), JN.mailtoUrl(match, job));
-  assert.equal(JN.combinedMessages([match], job, ''), JN.combinedMessages([match], job));
+  assert.equal(JN.groupMailtoUrl(members, job, 'Hi', ''), JN.groupMailtoUrl(members, job, 'Hi'));
+  assert.equal(JN.shareText(job, 'Hi', ''), JN.shareText(job, 'Hi'));
   assert.equal(JN.withRecruiter('Hi', ''), 'Hi');
 
-  const body = decodeURIComponent(JN.mailtoUrl(match, job, rec).split('&body=')[1]);
+  const body = decodeURIComponent(JN.groupMailtoUrl(members, job, 'Hi', rec).split('&body=')[1]);
   assert.equal(body, `Hi\n\nRecruiter contact for this role: ${rec}`);
-
-  const combined = JN.combinedMessages([match, { name: 'Riley', message: 'Yo' }], job, rec);
-  assert.equal(combined.split(rec).length - 1, 1, 'link appears once');
-  assert.match(combined, /^Job opportunity: Intern at Acme\nRecruiter contact for this role: /);
+  assert.equal(JN.shareText(job, 'Hi', rec), `Job opportunity: Intern at Acme\n\nHi\n\nRecruiter contact for this role: ${rec}`);
 });
