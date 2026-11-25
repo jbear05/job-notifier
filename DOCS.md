@@ -17,28 +17,29 @@ It has five contexts:
 │  └──────────────┬─────────────────────────────────────┘  │
 │  ┌──────────────┼─────────────────────────────────────┐  │
 │  │ overlay.html │ (extension page in an iframe)       │  │
-│  │  - Prompt, loading, results, errors                │  │
+│  │  - Prompt, locked/setup, loading, results, errors  │  │
 │  └──────────────┼─────────────────────────────────────┘  │
 └─────────────────┼────────────────────────────────────────┘
                   │ runtime messages (sender-checked)
 ┌─────────────────▼────────────────────────────────────────┐
 │  background.js (service worker)                          │
+│  - Sole authority for vault crypto, lock/unlock, API     │
 │  - Remembers recent postings per tab (storage.session)   │
 │  - Registers/unregisters the content script              │
 │  - Only place that calls the Anthropic API               │
 └──────────────────────────────────────────────────────────┘
 ┌──────────────────────────┐ ┌────────────────────────────┐
 │ popup.html / popup.js    │ │ options.html / options.js  │
-│ - Reads the active tab   │ │ - API key, model, effort,  │
-│   (activeTab+scripting)  │ │   threshold                │
-│ - Manual analysis        │ │ - Friends form, import,    │
-│ - Auto-detect switch     │ │   export                   │
+│ - Reads the active tab   │ │ - Passphrase setup/unlock/ │
+│   (activeTab+scripting)  │ │   lock/reset/P3 conversion │
+│ - Manual analysis        │ │ - API key, model, effort,  │
+│ - Auto-detect & Lock now │ │   threshold, friends CRUD  │
 └──────────────────────────┘ └────────────────────────────┘
 ```
 
-`lib/core.js` holds all the pure logic: detection patterns, settings normalization and allowlists, friend validation, prompt and request building, response parsing, error mapping, sender checks, and mailto helpers. It defines a global `JN` in the extension and is `require()`d by the Node tests.
+`lib/core.js` holds all the pure logic: detection patterns, settings normalization and allowlists, friend validation, passphrase validation, PBKDF2/AES-GCM vault helpers, legacy P3 detection, prompt and request building, response parsing, error mapping, sender checks, and mailto helpers. It defines a global `JN` in the extension and is `require()`d by the Node tests.
 
-The API call runs in the **service worker**, which checks who asked and can fetch even when a job site's Content Security Policy blocks outbound requests from content scripts. The popup and overlay receive the reply over a `chrome.runtime.connect` port and show an error if the port disconnects before the reply.
+The API call and all vault encryption/decryption run in the **service worker**, which checks who asked and can fetch even when a job site's Content Security Policy blocks outbound requests from content scripts. The popup and overlay receive analysis replies over a `chrome.runtime.connect` port and show an error if the port disconnects before the reply.
 
 ---
 
@@ -65,23 +66,29 @@ The switch shows on only when `autoDetect` is `true` and the permission is held.
 
 ---
 
-## Storage
+## Storage and passphrase encryption
 
 | Where | Key | Contents |
 |-------|-----|----------|
-| `chrome.storage.local` | `settings` | `{ apiKey, model, effort, threshold }`. Read through `JN.normalizeSettings`, so a model or effort outside the allowlists falls back to the default and the threshold is clamped to 0–1 |
+| `chrome.storage.local` | `vault` | Versioned (`v: 1`) AES-GCM encrypted envelope: `{ v: 1, kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: 600000, salt }, cipher: { name: 'AES-GCM', tagLength: 128, iv }, ct }` holding `{ v: 1, apiKey, friends }`. AAD binds version and KDF parameters (`job-notifier:vault:v1\|...`). Absent on a fresh install. |
+| `chrome.storage.local` | `settings` | `{ model, effort, threshold }`. Non-sensitive preferences only; `apiKey` is never written to `settings` in 2.0.0. Read through `JN.normalizeSettings`, so a model or effort outside the allowlists falls back to the default and the threshold is clamped to 0–1 |
 | `chrome.storage.local` | `autoDetect` | boolean, default `false` |
-| `chrome.storage.local` | `friends` | the friends list. Absent or `[]` on a fresh install; nothing is loaded until the user adds a friend |
+| `chrome.storage.session` | `vaultKey` | Base64 256-bit derived key kept in memory only while unlocked for the Chrome session. Cleared on **Lock now**, vault reset, or browser close |
 | `chrome.storage.session` | `jobs` | recently viewed postings by tab id: `{ [tabId]: { text, title, url, seenAt, hash } }`, text capped at 8,000 characters. `url` holds only the site's hostname, never the path, query, or fragment. Removed when the tab closes |
 | `chrome.storage.session` | `prompts` | the posting and confirmation origin for each tab, with browser-supplied identifiers for the top-level document and the overlay frame and document that loaded the prompt. Cleared on close, when the tab loads a new page (same-document URL changes keep it), when the tab closes, and when auto-detect is turned off |
 | `chrome.storage.session` | `prompted` | hashes of the last 100 postings already offered, so each posting is offered once |
 
 Rules:
-- The key, settings, and friends live only in `chrome.storage.local`, never `storage.sync`.
-- Postings and prompt state live only in `chrome.storage.session`, at its default trusted-contexts access level (no `setAccessLevel`), so content scripts can't read them. Session storage is memory only and is cleared when the browser closes.
-- Analysis results (job summary, scores, drafts) are never stored. They exist only in the open popup or overlay page.
+- `vault`, `settings`, and `autoDetect` live only in `chrome.storage.local`, never `storage.sync`.
+- `vaultKey`, postings, and prompt state live only in `chrome.storage.session`, at its default trusted-contexts access level (no `setAccessLevel`), so content scripts can't read them. Session storage is memory only and is cleared when the browser closes.
+- The passphrase itself is never stored in `chrome.storage.local`, `chrome.storage.session`, `storage.sync`, logs, or exports. Temporary `Uint8Array` key buffers are zeroed after use.
+- **Cryptography:** `PBKDF2` (`SHA-256`, 600,000 iterations, 16-byte CSPRNG salt, validated in `[600000, 5000000]`) derives 256 bits, imported as a non-extractable `AES-GCM` `CryptoKey` (`tagLength: 128`) with a fresh 12-byte CSPRNG IV on every write. Malformed or unsupported `vault` records fail closed to `unreadable` without falling back to plaintext or overwriting `vault`.
+- **Concurrency:** All vault reads/writes run sequentially inside `inVault`. A synchronous `vaultEpoch` counter invalidates in-flight unlocks, saves, and Claude `fetch` requests (`AbortController`) immediately when **Lock now** or **Reset** runs. Optimistic concurrency (`expectedRev` / `vaultRev`) prevents two open settings tabs from overwriting each other (`STALE_EDIT`), and `VAULT_LOCKED` / `VAULT_CHANGED` keep open pages synchronized.
+- **Legacy pre-encryption 2.0.0 conversion (P3) vs 1.x:** When `vault` is absent, `JN.detectLegacyPreEncryption200()` strictly identifies non-empty pre-encryption 2.0.0 `{ settings, friends }` records (rejecting 1.x fixtures). Analysis refuses to run and plaintext is never used or deleted until the user sets a passphrase and the worker writes `vault`, reads it back, decrypts/authenticates it, and then removes `friends` and `settings.apiKey` (resuming residual cleanup on the next valid unlock if interrupted).
+- **Exports (P2):** Exporting friends requires the vault to be unlocked and an explicit user click. It downloads `job-notifier-friends.json` containing only the validated friends array (no `apiKey`, passphrase, `vaultKey`, or settings), labeled as unencrypted and readable outside Chrome.
+- Analysis results (job summary, scores, drafts) are never stored. They exist only in the open popup or overlay page while unlocked.
 - Content scripts never call `chrome.storage`. They send messages to the worker instead.
-- The API key is stored unencrypted. It never appears in a message to a content script or the overlay, in an error message, in the friends export, or in console output. The settings page shows it in a password field.
+- The API key never appears in a message to a content script, the popup, or the overlay, in an error message, in the friends export, or in console output. The settings page shows it in a password field while unlocked.
 - No runtime file logs anything (no `console.` calls).
 
 Web pages can't read any of this, and nothing is written to the site's own `localStorage`/`sessionStorage`.
@@ -103,9 +110,10 @@ Web pages can't read any of this, and nothing is written to the site's own `loca
 
 ## Reading a page from the popup
 
-1. The popup calls `chrome.scripting.executeScript` on the active tab (allowed by `activeTab`): it injects `lib/core.js`, then runs `JN.extractJobText(document)` to read the visible text.
-2. If the text looks like a posting (`JN.isJobPage`), it fills the "Posting text" box. Otherwise the user pastes the posting. Chrome-restricted pages (`chrome://`, the Web Store, the PDF viewer) and failed reads get their own messages.
-3. **Find friends** sends `ANALYZE_JOB` with the text over the `analyze` port. The worker caps it at `JN.MAX_JOB_TEXT` (8,000) characters. Repeat clicks while a request is running share that request.
+1. Opening the popup queries `POPUP_STATUS`. If the vault is `uninitialized`/`needs-conversion`, `locked`, or `unreadable`, the popup renders a prompt directing the user to settings and does not read the page or call Claude.
+2. When unlocked with an API key and at least one included friend, the popup calls `chrome.scripting.executeScript` on the active tab (allowed by `activeTab`): it injects `lib/core.js`, then runs `JN.extractJobText(document)` to read the visible text.
+3. If the text looks like a posting (`JN.isJobPage`), it fills the "Posting text" box. Otherwise the user pastes the posting. Chrome-restricted pages (`chrome://`, the Web Store, the PDF viewer) and failed reads get their own messages.
+4. **Find friends** sends `ANALYZE_JOB` with the text over the `analyze` port. The worker verifies vault unlock and caps the text at `JN.MAX_JOB_TEXT` (8,000) characters. Repeat clicks while a request is running share that request.
 
 Opening the popup never calls Claude, and nothing is focused by default, so a stray Enter can't start a paid request.
 
@@ -138,7 +146,10 @@ Opening the popup never calls Claude, and nothing is focused by default, so a st
 
 4. content.js adds a full-viewport transparent iframe with overlay.html
    └─ The frame sends OVERLAY_STATE and gets the prompt for its own tab
-      (sender.tab.id): the posting's title and site, and whether a key is set
+      (sender.tab.id): the posting's title and site, and vaultState
+      (omitting hasKey and friendsStatus unless unlocked)
+   └─ If locked/uninitialized/unreadable, the overlay sends the user to
+      settings and re-checks OVERLAY_STATE on visibilitychange when they return
    └─ The worker records the browser-supplied overlay frame and document IDs
       when it returns the prompt. The overlay sends OVERLAY_READY after it renders.
    └─ The worker forwards readiness to the original top-level document.
@@ -162,13 +173,21 @@ Because the posting is stored by tab id in the extension (not in the site's stor
 | `OVERLAY_DISMISSED` | content script → worker | data-free request to clear the prompt after a timeout or Escape in the host page |
 | `CLOSE_OVERLAY` | worker → content script (top frame) | data-free signal to remove the frame and restore focus |
 | `STOP` | worker → content script (top frame) | data-free signal to stop page reading and close the overlay |
-| `OVERLAY_STATE` | overlay → worker | nothing; the reply is this tab's prompt or `{ state: 'none' }` |
+| `OVERLAY_STATE` | overlay → worker | nothing; the reply is this tab's prompt (`posting`, `vaultState`, and `hasKey`/`friendsStatus` only when unlocked) or `{ state: 'none' }` |
 | `OVERLAY_READY` | overlay → worker → matching content document | data-free signal that the rendered frame can accept clicks and take focus |
 | `OVERLAY_CLOSE` | overlay → worker | nothing |
+| `POPUP_STATUS` | popup → worker | nothing; minimal `{ vaultState }` (plus `hasKey`, `friendsStatus` only when unlocked) |
+| `VAULT_STATUS` | settings → worker | nothing; `{ ok, vaultState, legacySummary? }` |
+| `VAULT_SETUP` / `VAULT_UNLOCK` / `VAULT_CONVERT_LEGACY` | settings → worker | `{ passphrase }` (never stored or logged) |
+| `VAULT_LOCK` | settings or popup → worker | nothing |
+| `VAULT_RESET` | settings → worker | nothing |
+| `VAULT_GET_DATA` | settings → worker | nothing; returns `{ ok, apiKey, friends, settings, vaultRev }` when unlocked |
+| `VAULT_SAVE_CLAUDE` / `VAULT_SAVE_FRIENDS` | settings → worker | updated fields + `expectedRev` |
+| `VAULT_LOCKED` / `VAULT_CHANGED` | worker → extension pages | data-free broadcast to sync open surfaces |
 | `ANALYZE_TAB` | overlay → worker, `analyze` port | nothing; the worker uses `prompts[tabId]` |
 | `ANALYZE_JOB` | popup → worker, `analyze` port | `{ jobText }` |
 
-Both `analyze` requests get one reply: the results, or a code for no key, no friends, or no posting, or a mapped error (see Errors).
+Both `analyze` requests get one reply: the results, or a code for locked/uninitialized/unreadable/no key/no friends/no posting, or a mapped error (see Errors).
 
 ### Overlay isolation
 
@@ -176,8 +195,9 @@ The prompt and results render in an extension iframe. Friend names, emails, draf
 
 ### Sender checks
 
-Every message the worker handles goes through a pure helper in `lib/core.js`.
+Every message the worker handles goes through pure helpers in `lib/core.js`.
 
+- `JN.isSettingsSender(sender, runtimeId)` and `JN.isStaticExtensionSender(sender, page, runtimeId)` require `sender.id === runtimeId`, top-level `frameId` (`0` or `undefined`), and exact `chrome-extension://<runtimeId>/<page>` URL. Vault setup, unlock, reset, data retrieval, and saves are restricted to `options.html`; `POPUP_STATUS` and `ANALYZE_JOB` are restricted to `popup.html`; `VAULT_LOCK` is accepted only from `options.html` or `popup.html`.
 - `JN.isExtensionPage(sender, runtimeId)` requires Chrome's `sender.id` to match this extension and `sender.url` to use the `chrome-extension:` scheme. This supports the dynamically assigned overlay origin. It applies to overlay page messages and the `analyze` port. A content script that connects to the port is disconnected because its sender URL belongs to the web page.
 - `JN.isValidContentMessage(msg, sender, runtimeId)` accepts `JOB_SEEN`, `CONFIRMATION_SEEN`, and `OVERLAY_DISMISSED` from this extension's content script in a tab's top frame (`frameId === 0`) on an http(s) URL, with string fields under their caps (text ≤ `MAX_JOB_TEXT`, title ≤ 200). With auto-detect off, only dismissal is accepted.
 
@@ -235,6 +255,7 @@ When there are matches, the share step asks "Do you have a recruiter contact for
 ## Known limitations
 
 - **Heuristic detection.** Confirmations shown inside cross-origin iframes, or only as images or animations, aren't detected. Use the popup.
-- **Bring your own key.** Each user needs an Anthropic API key and pays Anthropic directly. There is no backend by design, so the key lives in the browser, unencrypted in `chrome.storage.local`. Users should set a spend limit in the Claude Console.
+- **Bring your own key.** Each user needs an Anthropic API key and pays Anthropic directly. There is no backend by design; the key and friends list are passphrase-encrypted at rest in `chrome.storage.local` and stay unlocked in `chrome.storage.session` until **Lock now** or browser close. Users should set a spend limit in the Claude Console.
+- **Storage deletion boundaries.** Chrome's `chrome.storage.local` updates perform logical deletion; prior profile backups or uncompacted LevelDB blocks created before encryption or reset cannot be retroactively scrubbed by the extension.
 - **Screen readers in the overlay.** `aria-modal` inside an iframe doesn't hide the host page from screen-reader browse mode. Fixing it would mean making the host page inert, which modifies its DOM, so it isn't done.
 - **No true auto-send.** That would need OAuth with an email provider (Gmail API, Microsoft Graph).

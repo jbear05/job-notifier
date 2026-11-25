@@ -73,12 +73,14 @@ function loadWorker({ fetch = async () => { throw new Error('no network in tests
       id: RID,
       getURL: p => `chrome-extension://${RID}/${p}`,
       openOptionsPage() {},
+      sendMessage: async () => {},
       onStartup: event(), onInstalled: event(), onMessage: event(), onConnect: event(),
     },
     tabs: { onUpdated: event(), onRemoved: event(), query: async () => [], sendMessage: () => Promise.resolve(), create: async () => {} },
   };
   const ctx = {
-    chrome, URL, TextEncoder, AbortController, AbortSignal: abortSignal, setTimeout, clearTimeout, fetch,
+    chrome, crypto: globalThis.crypto, URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob,
+    AbortController, AbortSignal: abortSignal, setTimeout, clearTimeout, fetch,
   };
   vm.createContext(ctx);
   ctx.importScripts = (...files) => {
@@ -252,10 +254,29 @@ test('review 2 privacy: the stored posting site is the hostname without a non-de
 test('review 2 timeout: the worker reports a fetch timeout before Chrome’s 30-second limit', async () => {
   const signal = AbortSignal.abort(new DOMException('Test deadline reached', 'TimeoutError'));
   let deadline;
-  const { chrome } = loadWorker({
+  const { chrome, send } = loadWorker({
     abortSignal: { timeout: ms => { deadline = ms; return signal; } },
     fetch: async (_url, options) => { throw options.signal.reason; },
   });
+  const optSender = { id: RID, url: `chrome-extension://${RID}/options.html`, frameId: 0 };
+  const setup = await send({ type: 'VAULT_SETUP', passphrase: 'test-passphrase-value' }, optSender);
+  assert.equal(setup?.ok, true);
+  const claude = await send({
+    type: 'VAULT_SAVE_CLAUDE',
+    apiKey: 'sk-ant-test',
+    model: 'claude-haiku-5-5',
+    effort: 'low',
+    threshold: 0.6,
+    expectedRev: setup.vaultRev,
+  }, optSender);
+  assert.equal(claude?.ok, true);
+  const friends = await send({
+    type: 'VAULT_SAVE_FRIENDS',
+    friends: [{ name: 'Sam', contact: 'sam@example.com', skills: ['Go'] }],
+    expectedRev: claude.vaultRev,
+  }, optSender);
+  assert.equal(friends?.ok, true);
+
   const response = new Promise(resolve => {
     const port = {
       name: 'analyze',

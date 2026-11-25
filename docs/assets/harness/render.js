@@ -125,19 +125,52 @@ async function main() {
 
   if (!REVIEW) return;
   fs.mkdirSync(REVIEW, { recursive: true });
-  // Every popup state in the Design's state table, plus the auto-detect panel. Full content height.
-  for (const state of ['setup', 'no-friends', 'no-friends-included', 'posting-found', 'not-a-posting', 'page-chrome-blocks',
-    'read-failed', 'loading', 'results', 'no-matches', 'error', 'auto-detect-panel']) {
-    await shot({ page: url('popup.html'), state, out: review(`popup-${state}.png`), width: 380, full: true });
+  // Every popup state in the Design's state table, plus vault and auto-detect states. Full content height.
+  for (const [file, state] of [
+    ['popup-uninitialized', 'vault-uninitialized'],
+    ['popup-locked', 'vault-locked'],
+    ['popup-unreadable', 'vault-unreadable'],
+    ['popup-setup', 'setup'],
+    ['popup-no-friends', 'no-friends'],
+    ['popup-no-friends-included', 'no-friends-included'],
+    ['popup-posting-found', 'posting-found'],
+    ['popup-not-a-posting', 'not-a-posting'],
+    ['popup-page-chrome-blocks', 'page-chrome-blocks'],
+    ['popup-read-failed', 'read-failed'],
+    ['popup-loading', 'loading'],
+    ['popup-results', 'results'],
+    ['popup-no-matches', 'no-matches'],
+    ['popup-error', 'error'],
+    ['popup-auto-detect-panel', 'auto-detect-panel'],
+  ]) {
+    await shot({ page: url('popup.html'), state, out: review(`${file}.png`), width: 380, full: true });
   }
   for (const width of [1280, 800, 375]) {
-    await shot({ page: url('options.html'), state: 'settings', out: review(`settings-${width}.png`), width, full: true });
+    await shot({ page: url('options.html'), state: 'settings', out: review(`settings-unlocked-${width}.png`), width, full: true });
   }
-  await shot({ page: url('options.html'), state: 'first-run', out: review('settings-first-run-1280.png'), width: 1280, full: true });
+  for (const [file, state, width] of [
+    ['settings-setup-1280', 'settings-setup', 1280],
+    ['settings-setup-375', 'settings-setup', 375],
+    ['settings-setup-mismatch-1280', 'settings-setup-mismatch', 1280],
+    ['settings-p3-convert-1280', 'settings-p3-convert', 1280],
+    ['settings-locked-1280', 'settings-locked', 1280],
+    ['settings-locked-error-1280', 'settings-locked-error', 1280],
+    ['settings-reset-confirm-1280', 'settings-reset-confirm', 1280],
+    ['settings-unreadable-1280', 'settings-unreadable', 1280],
+    ['settings-first-run-1280', 'first-run', 1280],
+  ]) {
+    await shot({ page: url('options.html'), state, out: review(`${file}.png`), width, full: true });
+  }
   for (const [name, state, width, height] of [
+    ['overlay-uninitialized', 'vault-uninitialized', 1280, 800],
+    ['overlay-locked-prompt', 'vault-locked', 1280, 800],
+    ['overlay-locked-cleared', 'locked-cleared', 1280, 800],
     ['overlay-prompt', 'prompt', 1280, 800],
     ['overlay-prompt-no-key', 'prompt-no-key', 1280, 800],
     ['overlay-results', 'results', 1280, 800],
+    ['overlay-narrow-uninitialized', 'vault-uninitialized', 375, 812],
+    ['overlay-narrow-locked-prompt', 'vault-locked', 375, 812],
+    ['overlay-narrow-locked-cleared', 'locked-cleared', 375, 812],
     ['overlay-narrow-prompt', 'prompt', 375, 812],
     ['overlay-narrow-results', 'results', 375, 812],
   ]) {

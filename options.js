@@ -1,6 +1,6 @@
-// Settings page (spec Design: Settings page). Each section saves on its own.
-// Friends from the form and from imports go through JN.cleanFriends, the same
-// validator the worker uses (criterion 35). The key stays in a password field.
+// Settings page (spec Design: Settings page). Passphrase setup, unlock, conversion,
+// lock, and reset talk to the service worker; unlocked saves persist through the
+// worker's encrypted vault with expectedRev optimistic concurrency.
 
 const $ = id => document.getElementById(id);
 const DEFAULT_MODEL = JN.MODELS.find(m => m.id === JN.DEFAULT_SETTINGS.model);
@@ -8,6 +8,12 @@ let friends = [];
 let editing = -1; // index of the friend in the form, or -1 when adding
 let pendingImport = null; // { file, friends } waiting for Add or Replace
 let hadKey = false;
+let currentVaultState = 'locked';
+let currentVaultRev = null;
+let legacySummary = { hasKey: false, friendCount: 0 };
+let vaultBusy = false;
+let resetOpener = null;
+let ignoringNextVaultChanged = false;
 
 const plural = n => (n === 1 ? '1 friend' : `${n} friends`);
 
@@ -28,10 +34,388 @@ function clearErrors(ids) {
   }
 }
 
+function clearPassphraseInputs() {
+  for (const id of ['setup-passphrase', 'setup-confirm', 'convert-passphrase', 'convert-confirm', 'unlock-passphrase']) {
+    const el = $(id);
+    if (el) {
+      el.readOnly = false;
+      el.value = '';
+    }
+  }
+}
+
+function clearSensitiveDom() {
+  currentVaultRev = null;
+  hadKey = false;
+  $('api-key').value = '';
+  $('claude-status').textContent = '';
+  $('model-note').hidden = true;
+  clearErrors(['api-key', 'threshold']);
+
+  friends = [];
+  editing = -1;
+  pendingImport = null;
+  $('friend-list').replaceChildren();
+  $('friends-empty').hidden = true;
+  $('import-panel').hidden = true;
+  $('import-summary').textContent = '';
+  $('friends-status').textContent = '';
+  $('import-error').textContent = '';
+  $('friend-form').hidden = true;
+  $('add-friend').hidden = false;
+  $('f-name').value = '';
+  $('f-email').value = '';
+  $('f-skills').value = '';
+  $('f-interests').value = '';
+  $('f-level').value = '';
+  $('f-notify').checked = true;
+  clearErrors(['f-name', 'f-email', 'f-skills', 'f-interests']);
+  clearPassphraseInputs();
+}
+
+const VAULT_BUTTON_IDS = [
+  'setup-submit', 'convert-submit', 'convert-reset-toggle',
+  'unlock-submit', 'forgot-btn', 'unreadable-reset-btn',
+  'reset-confirm-btn', 'reset-cancel-btn', 'lock-btn',
+];
+const VAULT_PENDING_IDS = {
+  setup: 'setup-pending',
+  convert: 'convert-pending',
+  unlock: 'unlock-pending',
+  reset: 'reset-pending',
+  lock: 'lock-pending',
+};
+const VAULT_INPUT_IDS = [
+  'setup-passphrase', 'setup-confirm',
+  'convert-passphrase', 'convert-confirm',
+  'unlock-passphrase',
+];
+
+function setVaultPending(kind, pending) {
+  vaultBusy = pending;
+  for (const id of VAULT_BUTTON_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    if (pending) el.setAttribute('aria-disabled', 'true');
+    else el.removeAttribute('aria-disabled');
+  }
+  for (const [k, pid] of Object.entries(VAULT_PENDING_IDS)) {
+    $(pid).hidden = !(pending && k === kind);
+  }
+  for (const id of VAULT_INPUT_IDS) {
+    $(id).readOnly = pending;
+  }
+}
+
+const VAULT_COPY = {
+  uninitialized: {
+    lede: 'Create a passphrase to encrypt your API key and friends list in this browser.',
+    heading: 'Create a passphrase',
+    subtitle: 'Protects your API key and friends list in this Chrome profile.',
+  },
+  'needs-conversion': {
+    lede: 'Create a passphrase to encrypt your existing API key and friends list in this browser.',
+    heading: 'Encrypt existing saved data',
+    subtitle: 'Unencrypted 2.0.0 data was found in this browser.',
+  },
+  locked: {
+    lede: 'Your saved API key and friends list are locked in this browser.',
+    heading: 'Unlock saved data',
+    subtitle: 'Your API key and friends list are encrypted.',
+  },
+  unreadable: {
+    lede: 'Your saved API key and friends list are locked in this browser.',
+    heading: "Saved data can't be read",
+    subtitle: 'The encrypted record in this browser is damaged or unsupported.',
+  },
+  unlocked: {
+    lede: 'Your API key and friends list are encrypted in this browser. Lock them anytime when you step away.',
+    heading: 'Passphrase lock',
+    subtitle: 'Unlocked for this Chrome session.',
+  },
+};
+
+function renderVaultState(state, { summary, focus = false, statusId, statusText } = {}) {
+  currentVaultState = state;
+  if (summary) legacySummary = summary;
+  const copy = VAULT_COPY[state] || VAULT_COPY.locked;
+
+  $('page-lede').textContent = copy.lede;
+  $('vault-heading').textContent = copy.heading;
+  $('vault-subtitle').textContent = copy.subtitle;
+
+  $('setup-form').hidden = state !== 'uninitialized';
+  $('convert-view').hidden = state !== 'needs-conversion';
+  $('convert-error-block').hidden = true;
+  $('unlock-form').hidden = state !== 'locked';
+  $('unreadable-view').hidden = state !== 'unreadable';
+  $('unlocked-view').hidden = state !== 'unlocked';
+  $('reset-panel').hidden = true;
+  $('reset-confirm-check').checked = false;
+  $('reset-confirm-error').textContent = '';
+  resetOpener = null;
+
+  clearErrors([
+    'setup-passphrase', 'setup-confirm',
+    'convert-passphrase', 'convert-confirm',
+    'unlock-passphrase',
+  ]);
+  for (const sid of ['setup-status', 'unlock-status', 'vault-status', 'convert-error']) {
+    say(sid, '');
+  }
+
+  if (state === 'needs-conversion') {
+    const n = legacySummary.friendCount || 0;
+    const friendWord = n === 1 ? '1 saved friend' : `${n} saved friends`;
+    $('convert-summary').textContent = `Found ${legacySummary.hasKey ? 'a saved API key' : 'no API key'} and ${friendWord} stored without encryption.`;
+  }
+
+  const unlocked = state === 'unlocked';
+  $('vault').classList.toggle('is-unlocked', unlocked);
+  $('claude').hidden = !unlocked;
+  $('friends').hidden = !unlocked;
+  if (!unlocked) clearSensitiveDom();
+  else clearPassphraseInputs();
+
+  if (statusId && statusText) say(statusId, statusText);
+  if (focus) {
+    const target = unlocked && location.hash === '#friends' ? $('friends-heading') : $('vault-heading');
+    target.focus();
+  }
+}
+
+function validatePassphrasePair(passId, confirmId) {
+  const pass = $(passId).value;
+  const confirm = $(confirmId).value;
+  clearErrors([passId, confirmId]);
+
+  const err = JN.validatePassphrase(pass);
+  if (err) {
+    setError(passId, err);
+    $(passId).value = '';
+    $(confirmId).value = '';
+    $(passId).focus();
+    return null;
+  }
+  if (!confirm.length) {
+    setError(confirmId, 'Confirm your passphrase.');
+    $(confirmId).focus();
+    return null;
+  }
+  if (pass !== confirm) {
+    setError(confirmId, "Passphrases don't match. Enter the same passphrase in both fields.");
+    $(confirmId).value = '';
+    $(confirmId).focus();
+    return null;
+  }
+  return pass;
+}
+
+async function sendWorker(msg) {
+  return chrome.runtime.sendMessage(msg);
+}
+
+async function loadUnlockedData() {
+  const res = await sendWorker({ type: 'VAULT_GET_DATA' });
+  if (currentVaultState !== 'unlocked') return false;
+  if (!res || !res.ok) {
+    if (res?.code === 'LOCKED') await loadVault({ focus: false });
+    else if (res?.vaultState) renderVaultState(res.vaultState);
+    return false;
+  }
+  currentVaultRev = res.vaultRev;
+  const s = JN.normalizeSettings(res.settings);
+  hadKey = !!res.apiKey;
+  $('api-key').value = res.apiKey;
+  $('model').value = s.model;
+  $('effort').value = s.effort;
+  $('threshold').value = s.threshold;
+  if (typeof res.storedModel === 'string' && res.storedModel !== s.model) {
+    $('model-note').textContent = `${res.storedModel} from an earlier version isn't offered anymore, so Job Notifier now uses ${DEFAULT_MODEL.name}.`;
+    $('model-note').hidden = false;
+  } else {
+    $('model-note').hidden = true;
+  }
+  friends = JN.storedFriends(res.friends);
+  renderFriends();
+  return true;
+}
+
+function handleLockTransition(focus = true) {
+  clearSensitiveDom();
+  renderVaultState('locked', {
+    focus,
+    statusId: 'unlock-status',
+    statusText: 'Locked. Your API key and friends were cleared from memory.',
+  });
+}
+
+// ── Vault actions ──
+
+async function submitSetup(e) {
+  e.preventDefault();
+  if (vaultBusy) return;
+  const pass = validatePassphrasePair('setup-passphrase', 'setup-confirm');
+  if (!pass) return;
+
+  setVaultPending('setup', true);
+  ignoringNextVaultChanged = true;
+  let res;
+  try {
+    res = await sendWorker({ type: 'VAULT_SETUP', passphrase: pass });
+  } finally {
+    clearPassphraseInputs();
+    setVaultPending('setup', false);
+    ignoringNextVaultChanged = false;
+  }
+  if (res?.ok) {
+    renderVaultState('unlocked', {
+      focus: true,
+      statusId: 'vault-status',
+      statusText: 'Passphrase created. Unlocked for this session.',
+    });
+    await loadUnlockedData();
+    return;
+  }
+  if (res?.code === 'LOCKED') return loadVault({ focus: true });
+  say('setup-status', res?.error || "Couldn't create passphrase.", true);
+}
+
+async function submitConvert(e) {
+  e.preventDefault();
+  if (vaultBusy) return;
+  $('convert-error-block').hidden = true;
+  say('convert-error', '');
+  const pass = validatePassphrasePair('convert-passphrase', 'convert-confirm');
+  if (!pass) return;
+
+  setVaultPending('convert', true);
+  ignoringNextVaultChanged = true;
+  let res;
+  try {
+    res = await sendWorker({ type: 'VAULT_CONVERT_LEGACY', passphrase: pass });
+  } finally {
+    clearPassphraseInputs();
+    setVaultPending('convert', false);
+    ignoringNextVaultChanged = false;
+  }
+  if (res?.ok) {
+    renderVaultState('unlocked', {
+      focus: true,
+      statusId: 'vault-status',
+      statusText: 'Existing data encrypted and unlocked for this session.',
+    });
+    await loadUnlockedData();
+    return;
+  }
+  if (res?.code === 'LOCKED') return loadVault({ focus: true });
+  $('convert-error-block').hidden = false;
+  $('convert-error-heading').focus();
+}
+
+async function submitUnlock(e) {
+  e.preventDefault();
+  if (vaultBusy) return;
+  clearErrors(['unlock-passphrase']);
+  say('unlock-status', '');
+  const pass = $('unlock-passphrase').value;
+  if (!pass.length) {
+    setError('unlock-passphrase', 'Enter your passphrase.');
+    $('unlock-passphrase').value = '';
+    $('unlock-passphrase').focus();
+    return;
+  }
+
+  setVaultPending('unlock', true);
+  ignoringNextVaultChanged = true;
+  let res;
+  try {
+    res = await sendWorker({ type: 'VAULT_UNLOCK', passphrase: pass });
+  } finally {
+    clearPassphraseInputs();
+    setVaultPending('unlock', false);
+    ignoringNextVaultChanged = false;
+  }
+  if (res?.ok) {
+    renderVaultState('unlocked', { focus: true });
+    await loadUnlockedData();
+    return;
+  }
+  if (res?.code === 'UNREADABLE') {
+    renderVaultState('unreadable', { focus: true });
+    return;
+  }
+  if (res?.code === 'UNINITIALIZED') {
+    renderVaultState('uninitialized', { focus: true });
+    return;
+  }
+  if (res?.code === 'LOCKED') return loadVault({ focus: true });
+  setError('unlock-passphrase', 'Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.');
+  $('unlock-passphrase').focus();
+}
+
+async function onLockClick() {
+  if (vaultBusy) return;
+  setVaultPending('lock', true);
+  try {
+    await sendWorker({ type: 'VAULT_LOCK' });
+  } finally {
+    setVaultPending('lock', false);
+  }
+  handleLockTransition(true);
+}
+
+function openResetPanel(openerId) {
+  if (vaultBusy) return;
+  resetOpener = openerId;
+  $('reset-confirm-check').checked = false;
+  $('reset-confirm-error').textContent = '';
+  $('reset-panel').hidden = false;
+  $('reset-heading').focus();
+}
+
+function closeResetPanel() {
+  if (vaultBusy) return;
+  const opener = resetOpener;
+  resetOpener = null;
+  $('reset-panel').hidden = true;
+  $('reset-confirm-check').checked = false;
+  $('reset-confirm-error').textContent = '';
+  if (opener && $(opener)) $(opener).focus();
+}
+
+async function confirmReset() {
+  if (vaultBusy) return;
+  $('reset-confirm-error').textContent = '';
+  if (!$('reset-confirm-check').checked) {
+    $('reset-confirm-error').textContent = 'Check the box to confirm you want to erase your saved data.';
+    $('reset-confirm-check').focus();
+    return;
+  }
+  setVaultPending('reset', true);
+  ignoringNextVaultChanged = true;
+  let res;
+  try {
+    res = await sendWorker({ type: 'VAULT_RESET' });
+  } finally {
+    clearSensitiveDom();
+    setVaultPending('reset', false);
+    ignoringNextVaultChanged = false;
+  }
+  if (res?.ok) {
+    renderVaultState('uninitialized', {
+      focus: true,
+      statusId: 'setup-status',
+      statusText: 'Saved data erased. Create a new passphrase to start fresh.',
+    });
+  }
+}
+
 // ── Claude ──
 
 async function saveClaude(e) {
   e.preventDefault();
+  if (vaultBusy || currentVaultState !== 'unlocked') return;
   clearErrors(['api-key', 'threshold']);
   const apiKey = $('api-key').value.trim();
   const threshold = $('threshold').valueAsNumber;
@@ -47,11 +431,36 @@ async function saveClaude(e) {
   }
   if (firstBad) return firstBad.focus();
 
-  await chrome.storage.local.set({ settings: { apiKey, model: $('model').value, effort: $('effort').value, threshold } });
-  $('model-note').hidden = true;
-  say('claude-status', !apiKey && hadKey ? 'Saved. Your API key was removed from this browser.'
-    : !friends.length ? 'Saved. Next, add at least one friend below.' : 'Saved.');
-  hadKey = !!apiKey;
+  ignoringNextVaultChanged = true;
+  let res;
+  try {
+    res = await sendWorker({
+      type: 'VAULT_SAVE_CLAUDE',
+      apiKey,
+      model: $('model').value,
+      effort: $('effort').value,
+      threshold,
+      expectedRev: currentVaultRev,
+    });
+  } finally {
+    ignoringNextVaultChanged = false;
+  }
+  if (currentVaultState !== 'unlocked') return;
+  if (res?.ok) {
+    currentVaultRev = res.vaultRev;
+    $('model-note').hidden = true;
+    say('claude-status', !apiKey && hadKey ? 'Saved. Your API key was removed from this browser.'
+      : !friends.length ? 'Saved. Next, add at least one friend below.' : 'Saved.');
+    hadKey = !!apiKey;
+    return;
+  }
+  if (res?.code === 'LOCKED') return loadVault({ focus: true });
+  if (res?.code === 'STALE_EDIT') {
+    await loadUnlockedData();
+    if (currentVaultState !== 'unlocked') return;
+    return say('claude-status', 'Settings changed in another tab. Reloaded the latest saved data.', true);
+  }
+  say('claude-status', res?.error || 'Could not save settings.', true);
 }
 
 // ── Friends ──
@@ -85,26 +494,55 @@ function renderFriends() {
   if (empty && $('friend-form').hidden) openForm(-1, false);
 }
 
-// Returns null when saved, or the validator's message.
+// Returns null when saved, or the validator/worker error message.
 async function saveFriends(list) {
   const result = JN.cleanFriends(list);
   if (result.error) return result.error;
-  friends = result.friends;
-  await chrome.storage.local.set({ friends });
-  renderFriends();
-  return null;
+  ignoringNextVaultChanged = true;
+  let res;
+  try {
+    res = await sendWorker({
+      type: 'VAULT_SAVE_FRIENDS',
+      friends: result.friends,
+      expectedRev: currentVaultRev,
+    });
+  } finally {
+    ignoringNextVaultChanged = false;
+  }
+  if (currentVaultState !== 'unlocked') return null;
+  if (res?.ok) {
+    currentVaultRev = res.vaultRev;
+    friends = result.friends;
+    renderFriends();
+    return null;
+  }
+  if (res?.code === 'LOCKED') {
+    await loadVault({ focus: true });
+    return null;
+  }
+  if (res?.code === 'STALE_EDIT') {
+    await loadUnlockedData();
+    if (currentVaultState !== 'unlocked') return null;
+    return 'Friends changed in another tab. Reloaded the latest list.';
+  }
+  return res?.error || 'Could not save friends.';
 }
 
 async function setInclude(i, on) {
-  await saveFriends(friends.map((f, j) => (j === i ? { ...f, notify: on } : f)));
-  $('friend-list').children[i].querySelector('input').focus();
+  const error = await saveFriends(friends.map((f, j) => (j === i ? { ...f, notify: on } : f)));
+  if (error) return say('friends-status', error, true);
+  if (currentVaultState === 'unlocked' && $('friend-list').children[i]) {
+    $('friend-list').children[i].querySelector('input').focus();
+  }
 }
 
 async function removeFriend(i) {
   const { name } = friends[i];
   if (!confirm(`Remove ${name} from your friends list?`)) return;
   if (editing >= 0) closeForm();
-  await saveFriends(friends.filter((_, j) => j !== i));
+  const error = await saveFriends(friends.filter((_, j) => j !== i));
+  if (currentVaultState !== 'unlocked') return;
+  if (error) return say('friends-status', error, true);
   say('friends-status', `Removed ${name}.`);
   // An empty list reopens the add form, which hides the Add friend button.
   (editButton(i) || editButton(i - 1) || $('f-name')).focus();
@@ -145,6 +583,7 @@ const tooLong = list => list.length > 50 || list.some(x => x.length > 100);
 
 async function submitFriend(e) {
   e.preventDefault();
+  if (currentVaultState !== 'unlocked') return;
   clearErrors(['f-name', 'f-email', 'f-skills', 'f-interests']);
   const entry = {
     name: $('f-name').value.trim(),
@@ -171,6 +610,7 @@ async function submitFriend(e) {
   if (adding) list.push(entry);
   else list[editing] = entry;
   const error = await saveFriends(list);
+  if (currentVaultState !== 'unlocked') return;
   if (error) return say('friends-status', error, true);
   const index = adding ? friends.length - 1 : editing;
   hideForm();
@@ -181,6 +621,7 @@ async function submitFriend(e) {
 // ── Import and export ──
 
 async function onImportFile() {
+  if (currentVaultState !== 'unlocked') return;
   const file = $('import-file').files[0];
   $('import-file').value = '';
   if (!file) return;
@@ -195,6 +636,7 @@ async function onImportFile() {
   const n = result.friends.length;
   if (!friends.length) {
     const error = await saveFriends(result.friends);
+    if (currentVaultState !== 'unlocked') return;
     if (error) {
       $('import-error').textContent = `Couldn't import ${file.name}: ${error}`;
       return;
@@ -210,11 +652,13 @@ async function onImportFile() {
 }
 
 async function applyImport(replace) {
+  if (currentVaultState !== 'unlocked' || !pendingImport) return;
   const { file, friends: incoming } = pendingImport;
   pendingImport = null;
   $('import-panel').hidden = true;
   if (editing >= 0) closeForm();
   const error = await saveFriends(replace ? incoming : [...friends, ...incoming]);
+  if (currentVaultState !== 'unlocked') return;
   if (error) $('import-error').textContent = `Couldn't import ${file}: ${error}`;
   else {
     const n = plural(incoming.length);
@@ -223,14 +667,15 @@ async function applyImport(replace) {
   $('import-btn').focus();
 }
 
-// Writes only the friends list, in the format Import accepts. No key, no settings.
+// Writes only the friends list, in the format Import accepts. No key, no settings (P2).
 function exportFriends() {
+  if (currentVaultState !== 'unlocked' || !friends.length) return;
   const url = URL.createObjectURL(new Blob([JSON.stringify(friends, null, 2)], { type: 'application/json' }));
   h('a', { href: url, download: 'job-notifier-friends.json' }).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// ── Auto-detect (engineer A's contract; criteria 7, 36) ──
+// ── Auto-detect (criteria 7, 36) ──
 
 const REMOVED = "Auto-detect is off because site access was removed in Chrome's extension settings.";
 
@@ -258,32 +703,29 @@ function onAutoToggle(e) {
   });
 }
 
-// ── Load ──
+// ── Load & sync ──
 
-async function load() {
-  const data = await chrome.storage.local.get(['settings', 'friends']);
-  const s = JN.normalizeSettings(data.settings);
-  hadKey = !!s.apiKey;
-  $('api-key').value = s.apiKey;
-  $('model').value = s.model;
-  $('effort').value = s.effort;
-  $('threshold').value = s.threshold;
-  // A model saved by an earlier version that isn't offered now falls back to the default (criterion 33).
-  const stored = data.settings && data.settings.model;
-  if (typeof stored === 'string' && stored !== s.model) {
-    $('model-note').textContent = `${stored} from an earlier version isn't offered anymore, so Job Notifier now uses ${DEFAULT_MODEL.name}.`;
-    $('model-note').hidden = false;
-  }
-  // First run: no friends until the user adds one (criterion 2).
-  friends = JN.storedFriends(data.friends);
-  renderFriends();
-  renderAuto();
+async function loadVault({ focus = false } = {}) {
+  const status = await sendWorker({ type: 'VAULT_STATUS' }).catch(() => null);
+  const state = status?.vaultState || 'locked';
+  renderVaultState(state, { summary: status?.legacySummary, focus });
+  if (state === 'unlocked') await loadUnlockedData();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   $('version').textContent = chrome.runtime.getManifest().version;
   $('model').replaceChildren(...JN.MODELS.map(m =>
     h('option', { value: m.id }, m.id === DEFAULT_MODEL.id ? `${m.name} (default, lower cost)` : m.name)));
+
+  $('setup-form').addEventListener('submit', submitSetup);
+  $('convert-form').addEventListener('submit', submitConvert);
+  $('unlock-form').addEventListener('submit', submitUnlock);
+  $('lock-btn').addEventListener('click', onLockClick);
+  $('forgot-btn').addEventListener('click', () => openResetPanel('forgot-btn'));
+  $('convert-reset-toggle').addEventListener('click', () => openResetPanel('convert-reset-toggle'));
+  $('unreadable-reset-btn').addEventListener('click', () => openResetPanel('unreadable-reset-btn'));
+  $('reset-cancel-btn').addEventListener('click', closeResetPanel);
+  $('reset-confirm-btn').addEventListener('click', confirmReset);
 
   $('claude-form').addEventListener('submit', saveClaude);
   $('friend-form').addEventListener('submit', submitFriend);
@@ -313,5 +755,15 @@ document.addEventListener('DOMContentLoaded', () => {
     renderAuto();
   });
 
-  load();
+  chrome.runtime.onMessage.addListener(msg => {
+    if (msg?.type === 'VAULT_LOCKED') {
+      handleLockTransition(true);
+    } else if (msg?.type === 'VAULT_CHANGED') {
+      if (ignoringNextVaultChanged && (vaultBusy || msg.vaultState === 'unlocked')) return;
+      loadVault({ focus: false });
+    }
+  });
+
+  renderAuto();
+  loadVault({ focus: false });
 });

@@ -20,3 +20,12 @@ body { width: 380px; padding: var(--space-4); }
 .auto-panel h2, #panel h2 { font-size: 17px; line-height: 22px; }
 
 #panel { margin-top: var(--space-4); }
+
+.popup-footer {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}

@@ -49,8 +49,8 @@ BRING YOUR OWN ANTHROPIC API KEY
 Job Notifier calls Claude with your own Anthropic API key. Each click on Find friends is one request, billed to your Anthropic account at Anthropic's API prices. Job Notifier itself is free, with no account to create and no server of its own. The default model is the lower-cost Claude Haiku 5.5; Claude Sonnet 5.5 and Claude Opus 5.5 are also offered. You can set a spend limit in the Claude Console.
 
 PRIVACY
-- Your key, settings, and friends are stored only in this browser.
-- When you click Find friends, the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level go to Anthropic's API. Friends' email addresses and recruiter links are never sent.
+- Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or close Chrome.
+- When you click Find friends, the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level go to Anthropic's API. Friends' email addresses, your passphrase, and recruiter links are never sent.
 - No analytics, no tracking, no developer server.
 
 Privacy policy: https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md
@@ -101,7 +101,7 @@ Used with activeTab to run the function that reads the visible text of the tab t
 
 **storage**
 ```text
-Saves the user's settings, Anthropic API key, and friends list in chrome.storage.local on their device, and job postings the user views (with auto-detect on) in chrome.storage.session, which is memory only; a posting is kept until the user closes that tab or Chrome. Nothing is synced or sent to a developer server.
+Saves the user's passphrase-encrypted Anthropic API key and friends list plus non-sensitive preferences in chrome.storage.local on their device, and keeps the session unlock key (while unlocked) and job postings the user views (with auto-detect on) in chrome.storage.session, which is memory only until the user clicks Lock now or closes Chrome. Nothing is synced or sent to a developer server.
 ```
 
 **clipboardWrite**

@@ -13,15 +13,11 @@ The Chrome Web Store guidance calls for strong encryption at rest and disclosure
 - Put passphrase creation and entry in the extension's top-level settings page. Add locked and first-run paths to settings, popup, and overlay, including an unlock return path. Update the release screenshots that show changed UI.
 - Preserve the public release decision on 1.x upgrades. Treat existing plaintext in private development profiles as a separate, explicit decision. The Web Store submission remains the user's step.
 
-## Needs the user
+## Decisions (answered by the user, 2026-11-25)
 
-| Decision | Choices and impact |
-|---|---|
-| P1. Unlock duration | Unlocking once per Chrome session with a **Lock now** action is the recommended choice. An idle timeout adds automatic relocking, including when Chrome stays open. Per-use unlocking requires the passphrase again for each analysis. |
-| P2. Friends export | Keeping JSON export and labeling the download as readable outside Chrome is the recommended choice. Encrypted export adds a passphrase-protected backup format and restore flow. Legacy JSON import stays supported either way. Friends export never contains the API key. |
-| P3. Private development profiles | An explicit conversion of existing pre-encryption 2.0.0 data is the recommended choice. Verify the encrypted copy before clearing the original, so a failed or canceled conversion preserves it. The other choice is to start fresh with an explicit confirmation to clear old data. No automatic 1.x migration. |
-
-Lead collects decisions before implementation of affected work. Security selects and documents the cryptographic envelope and the session method after P1. Designer specifies the new states after P1–P3. QA builds failing tests from the agreed criteria before engineer implementation.
+- **P1. Unlock duration:** Once per Chrome session with a **Lock now** action.
+- **P2. Friends export:** Keep readable JSON export, labeled as readable outside Chrome (excludes API key; legacy JSON import stays supported).
+- **P3. Private development profiles:** Explicit conversion of existing pre-encryption 2.0.0 data (verify encrypted copy can be read and authenticated before clearing original; no automatic 1.x migration).
 
 ## Proposed behavior
 
@@ -46,13 +42,373 @@ Lead collects decisions before implementation of affected work. Security selects
 | P-09 | README, PRIVACY.md, DOCS.md, settings disclosures and store listing agree with the new at-rest protection, lock lifetime, what is sent, how to delete data, and the export format. Verify the manifest permissions and API destination are unchanged. The privacy explanation covers the unlocked period and the consequences of losing the passphrase. |
 | P-10 | Existing release tests pass, including permissions, data flow, ZIP allowlist, artifact secret scan, and manifest references. The final ZIP loads in a clean Chrome profile. Designer signs off on updated screens and assets using fictional data. Security and reviewer sign off on the scoped change. |
 
-## Design handoff
+## Design
 
-Designer owns the final placements, labels, status and error copy, return-to-settings focus, and responsive states. Use the existing Fraunces and IBM Plex Sans styles and teal palette. Preserve the existing pre-key cost and data-use disclosure. Prepare a fresh setup/settings capture, locked popup and overlay captures, and review evidence for unlocking and returning to analysis. The store capture uses fictional data.
+This extends the v2.0.0 design system in [public-release.md](public-release.md#design) and reuses `ui.css` and `ui.js` verbatim: Fraunces 600 headings, IBM Plex Sans 400/600 body, neutral base (`--bg`, `--bg-subtle`, `--border`, `--border-strong`, `--text`, `--text-muted`) with `--accent` (`#0f766e`) and `--error` (`#b42318`), `<= 4px` border radius, `--shadow-panel` on the overlay dialog only, no gradients, no blur, no emoji or symbol icons, and left-aligned layouts.
 
-## Security handoff
+Shared rules for every new state:
+- **Passphrase inputs:** use `type="password"`, `autocomplete="off"`, and `spellcheck="false"`, with **no show/hide toggle** (consistent with `#api-key` in `options.html`).
+- **Sensitive input clearing:** clear passphrase fields (`.value = ''`) immediately after reading their value on submit/use (create, convert, unlock, or validation failure) and whenever locking or canceling. When locking, also clear `#api-key`, all `#friend-form` inputs, `#import-panel`, and every rendered friend/result node from the DOM and in-memory state.
+- **Pending buttons:** never set HTML `disabled` on a focused control. While work is pending, set `aria-disabled="true"` (`.btn[aria-disabled="true"]`), keep the button focusable, and ignore clicks (`isBusy`).
+- **Focus on state change:** move focus to the new state's heading (`tabindex="-1"`) when an action transitions between vault states, opens an inline confirmation panel, or locks/clears results.
+- **Safe text rendering:** every count, error, and stored status uses `textContent` or `.value` (never `innerHTML`).
 
-Security owns the crypto and session boundary decisions, including allowed sender contexts, secret material lifetime, authentication of stored data, and behavior when vault operations and lock race. Threats to cover are disk/profile copies, offline passphrase guesses, stale extension pages, untrusted page or content-script messages, wrong or damaged data, migration interruption, and accidental disclosure in logs, snapshots or exports. Record which threats remain when a user has already unlocked data or an older copy exists.
+### Settings page (`options.html`, `options.css`, `options.js`)
+
+Add a `#vault` section (`class="section"`, keeping the two-column `220px minmax(0, 520px)` grid and `< 880px` stacked layout) immediately below `.page-header` and above `#claude`.
+
+- **Section visibility by vault state:**
+  - In `uninitialized`, `needs-conversion`, `locked`, `unreadable`, and `pending` (before unlock): `#vault` is visible; `#claude` and `#friends` stay `hidden` with their sensitive fields and DOM emptied; `#auto-detect` and `#privacy` remain visible below `#vault` so non-sensitive preferences and privacy links always work.
+  - In `unlocked`: `#vault` collapses to a compact `Passphrase lock` section above `#claude`, and `#claude` and `#friends` are visible.
+- **State-aware `.lede` under `<h1>Job Notifier settings</h1>`:**
+  - `uninitialized`: `Create a passphrase to encrypt your API key and friends list in this browser.`
+  - `needs-conversion`: `Create a passphrase to encrypt your existing API key and friends list in this browser.`
+  - `locked` / `unreadable`: `Your saved API key and friends list are locked in this browser.`
+  - `unlocked`: `Your API key and friends list are encrypted in this browser. Lock them anytime when you step away.`
+
+#### 1. Fresh passphrase setup (`uninitialized`)
+
+- **Left column (`.section-intro`):**
+  - `h2#vault-heading[tabindex="-1"]`: `Create a passphrase`
+  - `p.small.muted`: `Protects your API key and friends list in this Chrome profile.`
+- **Right column (`<form id="setup-form" class="section-body" novalidate>`):**
+  - **Setup disclosure (`.disclosure`):**
+    - Title (`.label`): `Before you create a passphrase`
+    - List:
+      - **Encrypted in this Chrome profile.** Your passphrase encrypts your Anthropic API key and friends list on disk.
+      - **No recovery.** Job Notifier has no server and cannot recover a forgotten passphrase. If you forget it, you will have to erase saved data and start over.
+      - **Unlocked per Chrome session.** Once unlocked, your data stays unlocked until you click **Lock now** or close Chrome.
+  - **Field 1:** Label `Passphrase` (`#setup-passphrase`, `type="password"`, `autocomplete="off"`, `spellcheck="false"`, `aria-describedby="setup-passphrase-help setup-passphrase-error"`).
+    - Help (`#setup-passphrase-help`, `.small.muted`): `At least 8 characters. Job Notifier cannot recover a forgotten passphrase.`
+    - Error (`#setup-passphrase-error`, `.small.error-text`): empty until invalid.
+  - **Field 2:** Label `Confirm passphrase` (`#setup-confirm`, `type="password"`, `autocomplete="off"`, `spellcheck="false"`, `aria-describedby="setup-confirm-error"`).
+    - Error (`#setup-confirm-error`, `.small.error-text`): empty until invalid.
+  - **Actions (`.actions`):** Primary button `Create passphrase` (`#setup-submit`), status `#setup-status` (`role="status"`).
+- **Validation & focus:**
+  - Empty passphrase: set `aria-invalid="true"` on `#setup-passphrase`, error `Enter a passphrase.`, clear both fields, focus `#setup-passphrase`.
+  - Whitespace-only or `< 8` characters: set `aria-invalid="true"` on `#setup-passphrase`, error `Use at least 8 characters (not all spaces).`, clear both fields, focus `#setup-passphrase`.
+  - `> 512` characters: set `aria-invalid="true"` on `#setup-passphrase`, error `Passphrase must be 512 characters or fewer.`, clear both fields, focus `#setup-passphrase`.
+  - Empty confirmation: set `aria-invalid="true"` on `#setup-confirm`, error `Confirm your passphrase.`, focus `#setup-confirm`.
+  - Mismatch: set `aria-invalid="true"` on `#setup-confirm`, error `Passphrases don't match. Enter the same passphrase in both fields.`, clear `#setup-confirm`, focus `#setup-confirm`.
+  - Success: clear both passphrase fields, reveal `#claude` and `#friends`, focus `#vault-heading` (or `#friends-heading` if `location.hash === '#friends'`), and set `#vault-status` to `Passphrase created. Unlocked for this session.`
+
+#### 2. P3 existing pre-encryption 2.0.0 data conversion (`needs-conversion`)
+
+Shown only when validated pre-encryption 2.0.0 data (`settings.apiKey` and/or `friends`) exists in `chrome.storage.local` with no encrypted vault. Never shown for 1.x profiles.
+
+- **Left column:**
+  - `h2#vault-heading[tabindex="-1"]`: `Encrypt existing saved data`
+  - `p.small.muted`: `Unencrypted 2.0.0 data was found in this browser.`
+- **Right column (`<form id="convert-form" class="section-body" novalidate>`):**
+  - **Conversion disclosure (`.disclosure`):**
+    - Title (`.label`): `Existing saved data found`
+    - Summary line (counts/presence only—never display the raw key or friend names/emails before encryption): `Found {a saved API key / no API key} and {n} saved {friend / friends} stored without encryption.`
+    - Body: `Create a passphrase to encrypt this data. Job Notifier checks that the encrypted copy can be read before removing the unencrypted original. Canceling or leaving this page leaves your existing data unchanged and locked.`
+  - **Fields:** `Passphrase` (`#convert-passphrase`) and `Confirm passphrase` (`#convert-confirm`), using the same password attributes, help line, and validation/mismatch rules as Fresh setup.
+  - **Actions:** Primary button `Encrypt saved data` (`#convert-submit`), text button `Erase existing data instead` (`#convert-reset-toggle`), status/alert `#convert-error` (`.small.error-text`, `role="alert"`).
+- **Failure / interruption handling:**
+  - If writing or authenticating the encrypted copy fails, preserve the unencrypted original intact, clear `#convert-passphrase` and `#convert-confirm`, render an `.error-block` above `#convert-form` (`heading`: `Couldn't encrypt saved data`, `body`: `Your existing data wasn't changed or deleted. Try creating your passphrase again.`), and focus its heading (`tabindex="-1"`). Retrying performs a clean conversion from the preserved original.
+  - Success: clear both fields, transition to `unlocked`, focus `#vault-heading`, and announce `Existing data encrypted and unlocked for this session.` in `#vault-status`.
+
+#### 3. Locked state (`locked`)
+
+- **Left column:**
+  - `h2#vault-heading[tabindex="-1"]`: `Unlock saved data`
+  - `p.small.muted`: `Your API key and friends list are encrypted.`
+- **Right column:**
+  - **Unlock form (`<form id="unlock-form" class="stack" novalidate>`):**
+    - Field: Label `Passphrase` (`#unlock-passphrase`, `type="password"`, `autocomplete="off"`, `spellcheck="false"`, `aria-describedby="unlock-passphrase-help unlock-passphrase-error"`).
+      - Help (`#unlock-passphrase-help`, `.small.muted`): `Unlocks your saved data for this Chrome session.`
+      - Error (`#unlock-passphrase-error`, `.small.error-text`, `role="alert"`): empty until error.
+    - Actions: Primary button `Unlock` (`#unlock-submit`), text button `Forgot passphrase?` (`#forgot-btn`), status `#unlock-status` (`.small`, `role="status"`).
+  - **Wrong passphrase error:**
+    - Leave stored ciphertext untouched and extension locked.
+    - Clear `#unlock-passphrase.value = ''`, set `aria-invalid="true"` on `#unlock-passphrase`, set `#unlock-passphrase-error` to `Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.`, and focus `#unlock-passphrase`.
+  - **Forgotten-passphrase reset panel (`#reset-panel`, `class="import-panel stack"`, `hidden` by default):**
+    - Clicking `Forgot passphrase?` reveals `#reset-panel` and moves focus to `#reset-heading` (`tabindex="-1"`).
+    - `h3#reset-heading[tabindex="-1"]` (Subheading 17/22): `Forgot your passphrase?`
+    - Body: `Job Notifier cannot unlock or recover your saved data without your passphrase. Starting fresh permanently deletes:`
+    - Bullet list:
+      - `Your saved Anthropic API key`
+      - `Your entire saved friends list`
+    - Note (`.small.muted`): `Your model and match settings, Auto-detect preference, and any exported JSON files on your computer are not deleted.`
+    - Confirmation checkbox (`.check`): `<input id="reset-confirm-check" type="checkbox" aria-describedby="reset-confirm-error" /> Yes, permanently erase my saved API key and friends list`
+    - Error (`#reset-confirm-error`, `.small.error-text`, `role="alert"`): if `Erase saved data` is clicked unchecked, show `Check the box to confirm you want to erase your saved data.` and focus `#reset-confirm-check`.
+    - Actions: Secondary button `Erase saved data` (`#reset-confirm-btn`), text button `Cancel` (`#reset-cancel-btn`).
+    - On `Cancel`: hide `#reset-panel`, uncheck `#reset-confirm-check`, clear `#reset-confirm-error`, return focus to `#forgot-btn` (or `#convert-reset-toggle` / `#unreadable-reset-btn` depending on opener). Storage remains untouched.
+    - On confirmed `Erase saved data`: enter pending state, delete encrypted vault (and any unmigrated P3 data), clear all inputs, transition to `uninitialized`, focus `#vault-heading` (`Create a passphrase`), and set `#setup-status` to `Saved data erased. Create a new passphrase to start fresh.`
+
+#### 4. Unreadable storage (`unreadable`)
+
+Shown when stored vault metadata/format is corrupted or an unsupported version on load or unlock (distinct from wrong passphrase on valid ciphertext).
+
+- **Left column:**
+  - `h2#vault-heading[tabindex="-1"]`: `Saved data can't be read`
+  - `p.small.muted`: `The encrypted record in this browser is damaged or unsupported.`
+- **Right column:**
+  - `.error-block.stack`:
+    - `p.label`: `Unable to unlock saved data`
+    - `p`: `Job Notifier couldn't verify the stored vault. Your existing storage was left untouched.`
+    - Actions: Secondary button `Erase and start fresh` (`#unreadable-reset-btn`). Clicking opens `#reset-panel` (same explicit confirmation checkbox flow above; canceling returns focus to `#unreadable-reset-btn` and leaves storage intact).
+
+#### 5. Unlocking / pending state (`pending`)
+
+Applies during passphrase creation, P3 conversion, unlock, lock, or reset. Only one vault operation may run at a time:
+- Show an inline `.loading` row (`role="status"`) with `.spinner` (`aria-hidden="true"`) and text:
+  - Setup: `Encrypting and saving…`
+  - Conversion: `Encrypting and verifying saved data…`
+  - Unlock: `Unlocking saved data…`
+  - Reset: `Erasing saved data…`
+  - Lock: `Locking…`
+- Keep active action buttons in `#vault` focusable with `aria-disabled="true"` (ignoring clicks) and set active passphrase inputs `readOnly = true` until the operation resolves, then clear the passphrase inputs.
+
+#### 6. Unlocked state (`unlocked`)
+
+- **`#vault` section:**
+  - Left column: `h2#vault-heading[tabindex="-1"]`: `Passphrase lock` | `p.small.muted`: `Unlocked for this Chrome session.`
+  - Right column:
+    - `p`: `Your API key and friends list stay unlocked until you click Lock now or close Chrome.`
+    - `.actions`: Secondary button `Lock now` (`#lock-btn`), status `#vault-status` (`.small`, `role="status"`).
+  - Clicking **Lock now** locks the session in the worker, clears `#api-key`, `#friend-form`, `#friend-list`, and in-memory `friends`/`pendingImport`, hides `#claude` and `#friends`, switches `#vault` to `locked`, focuses `#vault-heading` (`Unlock saved data`), and sets `#unlock-status` to `Locked. Your API key and friends were cleared from memory.`
+  - Multi-tab sync: if another extension context locks, unlocks, or resets the vault, this page immediately synchronizes its UI and clears sensitive DOM/memory on lock.
+- **`#claude` section disclosure update:**
+  - Replace the `"Stored unencrypted."` bullet in `.disclosure` with:
+    - `<strong>Encrypted with your passphrase.</strong> Your API key and friends list are encrypted in this Chrome profile and stay unlocked until you click Lock now or close Chrome. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a>`
+  - Add to the `"Never sent:"` bullet: `Your passphrase never leaves this browser.`
+- **`#friends` section export update (P2):**
+  - Keep `Export JSON` (`#export-btn`, available only while unlocked and list is non-empty).
+  - Update `#export-note` (`.small.muted`) to: `Exports a readable, unencrypted JSON file of your friends list (including email addresses, excluding your API key). Anyone with this file can read it outside Chrome.`
+- **`#privacy` section update:**
+  - Paragraph 1: `Your API key, settings, and friends are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or close Chrome. Job postings you view are kept in memory until you close their tab or Chrome.`
+  - Paragraph 3: `To delete everything Job Notifier stored, use Forgot passphrase? to erase saved data or remove it from Chrome's Extensions page. To remove only your key, unlock settings, clear the key field, and save.`
+
+### Popup (`popup.html`, `popup.css`, `popup.js`)
+
+Passphrase controls never appear in the popup. On open (`init()`), the popup queries the worker's vault/session status before checking key/friends or reading the active tab.
+
+| State | When | Heading (`h2[tabindex="-1"]`) | Body | Actions |
+|---|---|---|---|---|
+| Uninitialized | No vault created yet (`uninitialized` or `needs-conversion`) | `Set up Job Notifier` | `Job Notifier encrypts your Anthropic API key and friends list in this browser. Open settings to create a passphrase, add your key, and add at least one friend.` | Primary `Open settings` (`openSettings()`) |
+| Locked | Vault exists, session is locked | `Locked` | `Unlock your saved API key and friends list in settings to analyze job postings.` | Primary `Open settings to unlock` (`openSettings()`) |
+| Unreadable | Stored vault record is damaged/unsupported | `Saved data can't be read` | `Your encrypted data couldn't be read. Open settings to inspect or reset it.` | Primary `Open settings` (`openSettings()`) |
+| Unlocked, no API key | Vault unlocked, no key saved | `Set up Job Notifier` | (Existing setup body from `public-release.md` criterion 11) | Primary `Open settings` |
+| Unlocked, no friends / none included | Vault unlocked, key set | (Existing `Add a friend first` / `No friends included` states) | (Existing copy) | Primary `Add friends` / `Open settings` |
+| Unlocked, ready / loading / results / error | Vault unlocked, key + friends ok | (Existing input, loading, results, no-matches, error states) | (Existing copy) | (Existing actions) |
+
+- **No error styling on setup/locked:** neither `Uninitialized` nor `Locked` uses `.error-block` or "failed" wording.
+- **Auto-detect switch:** remains usable in `.popup-header` in all states because `autoDetect` is a non-sensitive preference.
+- **Unlocked footer with Lock now:** when the vault is `unlocked`, show a slim footer below `#panel` (`.popup-footer`: `margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;`):
+  - Left: `<span class="small muted">Unlocked for this session</span>`
+  - Right: text button `Lock now` (`#popup-lock-btn`).
+  - Hide `.popup-footer` whenever not `unlocked`.
+  - Clicking `Lock now` sends `VAULT_LOCK` to the worker, immediately clears `input`, any rendered results/drafts/job summary in `#panel`, hides `.popup-footer`, shows the `Locked` state, and focuses the `Locked` heading.
+- **Mid-flight or external lock handling:**
+  - If `ANALYZE_JOB` fails with `LOCKED`, if the worker broadcasts `VAULT_LOCKED` while the popup is open, or if a late analysis reply arrives after locking: immediately discard any results/friend data, clear `#panel`, hide `.popup-footer`, transition to `Locked`, and move focus to the `Locked` heading (if `moveFocus` is true or results/loading were visible). Never display stale friend data.
+- **Return / reopen behavior:**
+  - Opening settings closes Chrome's toolbar popup. When the user unlocks in settings and reopens the popup on the posting tab, `init()` sees `unlocked`, verifies key/friends, and runs `readPage()`, restoring `"Job posting found"` (or `"Paste a job posting"`) and waiting for a **Find friends** click (zero automatic API requests on unlock/reopen).
+  - If the popup remains open when settings unlocks the vault (`VAULT_CHANGED`), re-run `init()` automatically.
+
+### Overlay (`overlay.html`, `overlay.css`, `overlay.js`)
+
+The iframe isolation, transparent `html, body`, `420px` top-right panel (`8px` inset under `480px`), `Close` button, `role="dialog"`, `aria-modal="true"`, `aria-labelledby="state-heading"`, Tab wrapping, `Escape` handling, and `OVERLAY_READY` gating from `public-release.md` stay unchanged. Passphrase controls never appear in the overlay.
+
+On `load()`, `OVERLAY_STATE` returns `{ state: 'none' }` or `{ state: 'prompt', posting: { title, meta }, vaultState: 'uninitialized' | 'needs-conversion' | 'locked' | 'unreadable' | 'unlocked', hasKey }` — carrying zero key or friend data (`hasKey` omitted unless `unlocked`).
+
+- **Confirmation prompt variants (`state: 'prompt'`):**
+  - **`vaultState === 'uninitialized' || vaultState === 'needs-conversion'`:**
+    - Heading: `Find friends for this job?`
+    - Posting block (`.posting`): `posting.title` and `posting.meta` (from the tab's posting, never from encrypted storage).
+    - Body (`#prompt-body`, `aria-describedby`): `Set up Job Notifier in settings first. You'll create a passphrase, add your Anthropic API key, and add at least one friend.`
+    - Actions: Primary `Open settings` (`recheck = true`, calls `openSettings()`), Secondary `Not now` (`OVERLAY_CLOSE`).
+  - **`vaultState === 'locked'`:**
+    - Heading: `Find friends for this job?`
+    - Posting block (`.posting`): `posting.title` and `posting.meta`.
+    - Body (`#prompt-body`, `aria-describedby`): `Your saved API key and friends list are locked. Open settings to unlock them, then return here to run the check.`
+    - Actions: Primary `Open settings to unlock` (`recheck = true`, calls `openSettings()`), Secondary `Not now` (`OVERLAY_CLOSE`).
+  - **`vaultState === 'unreadable'`:**
+    - Heading: `Find friends for this job?`
+    - Posting block (`.posting`): `posting.title` and `posting.meta`.
+    - Body (`#prompt-body`, `aria-describedby`): `Your saved data can't be read. Open settings to inspect or reset it.`
+    - Actions: Primary `Open settings` (`recheck = true`, calls `openSettings()`), Secondary `Not now` (`OVERLAY_CLOSE`).
+  - **`vaultState === 'unlocked' && !hasKey`:** existing no-key prompt (`Open settings` / `Not now`, `recheck = true`).
+  - **`vaultState === 'unlocked' && hasKey`:** existing confirmation prompt (`Find friends` / `Not now`).
+- **Locked mid-flow or on results (`ANALYZE_TAB` returns `code: 'LOCKED'`, or worker pushes `VAULT_LOCKED` while open):**
+  - Immediately clear `#panel-body` and discard any in-memory `result`, match cards, drafts, or friend names/emails. Ignore any late `ANALYZE_TAB` response that arrives after lock.
+  - Show `locked-cleared` state (`recheck = true`):
+    - Heading (`#state-heading[tabindex="-1"]`): `Job Notifier is locked`
+    - Body: `Your saved API key and friends list were locked, so any results were cleared. Open settings to unlock.`
+    - Actions: Primary `Open settings to unlock` (`openSettings()`), Secondary `Close` (`OVERLAY_CLOSE`).
+    - Focus moves to `#state-heading`.
+    - Scrim click closes this state (`state !== 'results'`), `Escape` closes, Tab wraps between `Close`, `Open settings to unlock`, and `Close`.
+- **Return from settings (`visibilitychange` when `recheck` is true):**
+  - When the user unlocks (or completes setup) in settings and returns to the confirmation tab, `overlay.js` re-runs `load()` (`OVERLAY_STATE`).
+  - If the tab's prompt state is still valid (`state === 'prompt'`, `vaultState === 'unlocked'`, `hasKey === true`), the overlay updates to the unlocked confirmation prompt (`Find friends for this job?` with **Find friends** primary button), focuses `#state-heading`, and waits for the user's click (unlocking never triggers `ANALYZE_TAB` automatically).
+  - If the prompt is no longer valid (`state === 'none'`), `overlay.js` calls `OVERLAY_CLOSE`.
+
+### Store assets and review screenshots (`docs/assets/` and `dist/review/`)
+
+All store screenshots use `1280x800` RGB PNG (color type 2, no transparency, no captions/frames/mockups) and the fictional Kestrel Grid / Priya Shah / Marcus Lee / Dana Okafor demo data from `public-release.md`.
+
+**Updated Chrome Web Store screenshots (`docs/assets/`):**
+1. `screenshot-1-overlay.png` (1280x800, viewport only): unchanged layout — demo confirmation page behind scrim with unlocked overlay showing `"2 friends might want this job"` and two fictional match cards.
+2. `screenshot-2-popup.png` (1280x800, whole Chrome browser window captured manually in real Chrome with toolbar visible): demo posting at `http://kestrel-grid.localhost:<port>/`, unlocked popup in `"Job posting found"` state showing `"Find friends"` and the slim `"Unlocked for this session · Lock now"` footer.
+3. `screenshot-3-settings.png` (1280x800, viewport only): top of unlocked settings page showing `h1`, updated lede, `#vault` `"Passphrase lock"` with `"Lock now"`, and `#claude` with the **updated `"Encrypted with your passphrase."` disclosure box**, masked API key field, and model select.
+4. `screenshot-4-prompt.png` (1280x800, viewport only): unlocked confirmation prompt on the demo confirmation page (`"Find friends for this job?"` + `"Find friends"`).
+
+**Required review screenshots (`dist/review/`, fictional data) for Designer sign-off:**
+- **Settings:** `settings-setup-1280.png`, `settings-setup-375.png`, `settings-setup-mismatch-1280.png`, `settings-p3-convert-1280.png`, `settings-locked-1280.png`, `settings-locked-error-1280.png`, `settings-reset-confirm-1280.png`, `settings-unreadable-1280.png`, `settings-unlocked-1280.png`, `settings-unlocked-800.png`, `settings-unlocked-375.png`.
+- **Popup (380px wide):** `popup-uninitialized.png`, `popup-locked.png`, `popup-posting-found.png`.
+- **Overlay (1280x800 composite + 375px narrow):** `overlay-uninitialized.png`, `overlay-locked-prompt.png`, `overlay-locked-cleared.png`.
+
+## Security
+
+### Assets, trust boundaries, and untrusted inputs
+
+- **Assets to protect:**
+  - The user's Anthropic API key (`apiKey`) and the billing charges authorized by it.
+  - All saved friend fields (`name`, `contact`, `skills`, `interests`, `level`, `notify`) and the user's personal social graph.
+  - Derived encryption key material (`CryptoKey`, raw session key bytes) and the user's passphrase.
+  - Existing release assets (job-search activity, `jobs`/`prompts` session state, host pages) remain protected under `docs/specs/public-release.md` criteria 24–38.
+- **Trust boundaries:**
+  1. **Persistent local storage (`chrome.storage.local`):** Readable offline from Chrome profile/disk backups and readable at runtime by extension content scripts. Must never hold the passphrase, reusable derived key, plaintext `apiKey`, or plaintext friend records (except transient pre-conversion P3 data prior to explicit conversion/reset).
+  2. **Session memory (`chrome.storage.session`):** Memory-only for the Chrome browser session and kept at Chrome's default `TRUSTED_CONTEXTS` access level (`setAccessLevel` is never called). Content scripts cannot access it. Never stores the passphrase or plaintext API key/friends; holds only the session-scoped `vaultKey` (while unlocked) alongside existing `jobs`, `prompts`, and `prompted`.
+  3. **Service worker (`background.js`):** Sole authority for cryptographic operations, `vault` reads/writes, lock/unlock state, and Claude API calls.
+  4. **Static extension pages (`options.html`, `popup.html`):** Run on `chrome-extension://<chrome.runtime.id>/` with CSP `script-src 'self'; object-src 'self'`. Only `options.html` handles passphrase entry and decrypted `apiKey`/friend editing. `popup.html` receives only minimal status before analysis and analysis results when unlocked.
+  5. **Web-accessible overlay frame (`overlay.html`):** Loaded with `use_dynamic_url: true` inside a host-page iframe. Never handles passphrases, never initiates lock/unlock/setup/reset, and receives only tab-owned prompt status and analysis results while unlocked.
+  6. **Content scripts (`content.js`) and host pages:** Untrusted renderer boundary. Zero access to `chrome.storage` or any `VAULT_*` message.
+
+### Crypto envelope, KDF/AEAD parameters, and versioned record schema
+
+All cryptographic operations use Chrome's built-in Web Crypto API (`crypto.subtle` and `crypto.getRandomValues`) with no third-party crypto dependencies.
+
+- **KDF:** `PBKDF2` with `SHA-256`, **600,000 iterations**, deriving 256 bits via `crypto.subtle.deriveBits`.
+  - **Salt:** 16 random bytes (128 bits) generated via `crypto.getRandomValues` on passphrase creation/reset/conversion.
+  - **Passphrase constraints:** Minimum 8 characters, maximum 512 characters, non-empty and not all-whitespace; exact bytes preserved (no silent trimming). Setup requires exact match on confirmation. The passphrase `CryptoKey` (`importKey('raw', ..., 'PBKDF2', false, ['deriveBits'])`) is non-extractable and discarded immediately after `deriveBits`.
+  - **Parameter validation on read:** Reject any record whose `iterations` is not an integer within `[600000, 5000000]` (prevents both downgrade and CPU-exhaustion DoS).
+- **AEAD Cipher:** `AES-GCM` with a 256-bit key (`tagLength: 128`).
+  - **IV / Nonce:** 12 random bytes (96 bits) generated fresh via `crypto.getRandomValues` on **every** encryption/write. Never reused or incremented.
+  - **Additional Authenticated Data (AAD):** UTF-8 encoding of `"job-notifier:vault:v1|" + kdf.name + "|" + kdf.hash + "|" + kdf.iterations + "|" + kdf.salt`, binding the ciphertext to the record version and KDF parameters so header tampering fails GCM tag verification.
+- **Persistent storage schema (`chrome.storage.local`):**
+  - `vault` (encrypted envelope):
+    ```json
+    {
+      "v": 1,
+      "kdf": {
+        "name": "PBKDF2",
+        "hash": "SHA-256",
+        "iterations": 600000,
+        "salt": "<base64, 16 decoded bytes>"
+      },
+      "cipher": {
+        "name": "AES-GCM",
+        "tagLength": 128,
+        "iv": "<base64, 12 decoded bytes>"
+      },
+      "ct": "<base64, ciphertext + 16-byte GCM auth tag>"
+    }
+    ```
+  - Decrypted plaintext payload inside `ct`:
+    ```json
+    {
+      "v": 1,
+      "apiKey": "",
+      "friends": []
+    }
+    ```
+    After decryption and JSON parsing, `apiKey` is normalized (`JN.str(..., 500)`) and `friends` is validated via `JN.storedFriends(...)` (and `v === 1` verified).
+  - Non-sensitive preferences remain in `chrome.storage.local`:
+    - `settings`: `{ model, effort, threshold }` — **`apiKey` is removed from `settings` and must never be written to `settings` in 2.0.0.**
+    - `autoDetect`: `boolean`.
+- **Fail-closed record validation:** If `vault` exists and fails schema validation (unknown `v`, invalid KDF/cipher names, out-of-range iterations, non-16-byte salt, non-12-byte IV, invalid base64, or missing `ct`), treat storage as `unreadable`—never fall back to plaintext, never auto-overwrite `vault`, and require an explicit user reset to start fresh.
+
+### Session storage boundary (P1: once per Chrome session + Lock now)
+
+- **Unlock lifetime:**
+  - On valid unlock (or setup/conversion), `deriveBits` produces 32 raw key bytes. The worker imports a non-extractable working `CryptoKey` (`extractable: false`, `['encrypt', 'decrypt']`), authenticates/decrypts `vault` to verify the passphrase before marking the session unlocked, writes the 32-byte key as base64 to `chrome.storage.session` under `vaultKey`, and zeroes the temporary `Uint8Array` buffer.
+  - The passphrase itself is **never** written to `chrome.storage.session`, `chrome.storage.local`, `chrome.storage.sync`, logs, or messages.
+- **Service worker restart (same Chrome session):**
+  - `chrome.storage.session` persists across MV3 service worker idle restarts. On demand, the worker reads `vaultKey` from `chrome.storage.session`, imports it (`extractable: false`), and decrypts + authenticates `vault` from `chrome.storage.local`. No re-prompt is required.
+- **Browser restart / extension reload:**
+  - Chrome clears `chrome.storage.session` automatically. `vaultKey` is absent, so the extension starts **locked** and never auto-unlocks.
+- **Lock now:**
+  - Immediately increments `vaultEpoch` (invalidating all in-flight operations), zeroes/drops any in-memory `CryptoKey` or cached decrypted data in the worker, aborts active Claude `fetch` requests, removes `vaultKey` from `chrome.storage.session`, and broadcasts a data-free `VAULT_LOCKED` signal to extension pages.
+  - All visible extension surfaces (`options.html`, `popup.html`, `overlay.html`) immediately clear API key inputs, friend lists, pending form/import edits, and displayed analysis results/drafts/recruiter fields.
+  - `jobs` and `prompts` in `chrome.storage.session` (which contain no vault secrets) may remain under existing TTL/navigation rules so returning to the posting/confirmation flow after unlock still works when available.
+
+### Allowed sender contexts and message contracts
+
+Every worker listener checks `sender` before dispatching:
+
+| Context | Sender check | Allowed messages | Prohibited |
+|---|---|---|---|
+| **Settings (`options.html`)** | `isSettingsSender`: `sender.id === chrome.runtime.id`, `new URL(sender.url).origin === 'chrome-extension://' + chrome.runtime.id`, `pathname === '/options.html'`, `(sender.frameId === undefined \|\| sender.frameId === 0)` | `VAULT_STATUS`, `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_LOCK`, `VAULT_RESET`, `VAULT_GET_DATA`, `VAULT_SAVE_CLAUDE`, `VAULT_SAVE_FRIENDS`, `VAULT_CONVERT_LEGACY` | Never sends passphrase to storage or logs; `VAULT_GET_DATA` rejected when locked |
+| **Popup (`popup.html`)** | `isStaticExtensionSender`: same origin check, `pathname === '/popup.html'`, `frameId === 0 \|\| undefined` | `POPUP_STATUS` (minimal state only), `VAULT_LOCK`, port `analyze` (`ANALYZE_JOB`) | `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_RESET`, `VAULT_GET_DATA`, `VAULT_SAVE_*`, `VAULT_CONVERT_LEGACY`; never reads `vault` or `vaultKey` directly |
+| **Overlay (`overlay.html`)** | `isExtensionPage` + `isOverlayFrame` + `ownsPrompt` (browser-assigned `frameId` & `documentId`) | `OVERLAY_STATE`, `OVERLAY_READY`, `OVERLAY_CLOSE`, port `analyze` (`ANALYZE_TAB`) | All `VAULT_*` messages; never reads `chrome.storage` |
+| **Content script (`content.js`)** | `isValidContentMessage` (`sender.tab`, `frameId === 0`, `http(s):` URL, capped strings) | `JOB_SEEN`, `CONFIRMATION_SEEN`, `OVERLAY_DISMISSED` | All `VAULT_*` messages, all `analyze` ports, all `chrome.storage` access |
+| **External pages / extensions** | No `onMessageExternal`, no `onConnectExternal`, no `externally_connectable` | None | All |
+
+**Minimum-disclosure replies before analysis:**
+- When `vaultState` is `'uninitialized'`, `'needs-conversion'`, `'locked'`, or `'unreadable'`, `POPUP_STATUS` and `OVERLAY_STATE` return `{ vaultState }` (plus `posting` for `OVERLAY_STATE` if a valid tab prompt exists) and **omit** `hasKey`, `friendsStatus`, `apiKey`, and `friends`.
+- When `vaultState === 'unlocked'`, `POPUP_STATUS` and `OVERLAY_STATE` return `{ vaultState: 'unlocked', hasKey, friendsStatus }` (booleans/enum `'empty' | 'none-included' | 'ok'` only—no API key, no friend names/contacts/skills).
+
+### Concurrency and race guarantees
+
+All vault reads/writes execute sequentially through a single worker promise queue (`inVault`), paired with a synchronous monotonic `vaultEpoch` counter and a `vaultRev` revision token:
+
+1. **Lock during Unlock:** `VAULT_LOCK` increments `vaultEpoch` **synchronously** upon receipt (before awaiting the queue), clears in-memory state, and queues `chrome.storage.session.remove('vaultKey')`. `VAULT_UNLOCK` captures `startEpoch = vaultEpoch` before PBKDF2 and verifies `startEpoch === vaultEpoch` after `deriveBits` and decryption complete. If `vaultEpoch` changed, `VAULT_UNLOCK` discards the key, does **not** write `vaultKey`, and replies `{ ok: false, code: 'LOCKED' }`.
+2. **Lock during Save:** `VAULT_SAVE_*` checks lock state and `vaultEpoch` inside `inVault` before writing. If already locked, it aborts with `{ ok: false, code: 'LOCKED' }` without touching `chrome.storage.local.vault`. If encryption or `chrome.storage.local.set` fails, `vault` in `chrome.storage.local` is never overwritten and the last confirmed ciphertext remains readable.
+3. **Lock during Analysis:** `analyze` snapshots `{ apiKey, friends, settings }` and `analysisEpoch = vaultEpoch` inside `inVault`. An `AbortController` registered for the request is aborted immediately on `VAULT_LOCK`. Before `fetch` and again before returning/posting results on the `analyze` port, the worker verifies `analysisEpoch === vaultEpoch`; if locked, it discards the response and returns `{ ok: false, code: 'LOCKED' }`. UI surfaces receiving `VAULT_LOCKED` or `code === 'LOCKED'` discard in-flight or late results without rendering them.
+4. **Concurrent edits from two settings pages:** `VAULT_GET_DATA` returns a `vaultRev` token (hash/counter of the current `vault` record). `VAULT_SAVE_*` requires `expectedRev`. If another settings tab saved or reset `vault` first, `expectedRev !== currentRev` rejects the stale write with `{ ok: false, code: 'STALE_EDIT' }`, preserving the newer ciphertext. Successful saves/setups/resets broadcast `VAULT_CHANGED` so other open `options.html` tabs reload fresh state.
+
+### P2: Readable JSON export rules
+
+- Exporting friends requires the vault to be **unlocked** (`VAULT_GET_DATA` / unlocked settings state) and an **explicit user click** on Export.
+- The exported file (`job-notifier-friends.json`) contains only the validated JSON array of friend objects (`JN.cleanFriends` schema), preserving compatibility with legacy JSON import (`JN.parseFriendsImport`).
+- Exports **never** include `apiKey`, passphrase, `vaultKey`, `vault` envelope metadata (`salt`, `iv`, `ct`), `settings` (`model`, `effort`, `threshold`), or `autoDetect`.
+- The settings UI clearly labels the export as **unencrypted and readable outside Chrome**.
+
+### P3: Pre-encryption 2.0.0 conversion detection and cleanup vs 1.x non-upgrade
+
+- **Strict candidate detection (`detectLegacyPreEncryption200`):**
+  - Only runs when `vault` is **absent** in `chrome.storage.local`.
+  - Requires non-empty legacy data (`settings.apiKey` non-blank or `friends.length > 0`).
+  - Validates strictly against the exact pre-encryption 2.0.0 schema:
+    - If `settings` is present: plain object with **only** keys in `['apiKey', 'model', 'effort', 'threshold']`, `model` in `JN.MODELS`, `effort` in `JN.EFFORTS`, `threshold` finite in `[0, 1]`, and `apiKey` empty or starting with `sk-ant-`.
+    - If `friends` is present: array passing `JN.cleanFriends(friends)` with zero errors and every entry having **only** known keys (`name`, `contact`, `skills`, `interests`, `level`, `notify`) of exact expected types (`Array` for `skills`/`interests`, `boolean` for `notify`, `string` for `name`/`contact`/`level`).
+  - **1.x non-upgrade:** Any profile failing this strict check (for example, missing `effort`, an unlisted/free-text 1.x model, extra legacy properties, or non-conforming friend records) is **not** a P3 candidate and is never upgraded automatically or offered conversion.
+- **No silent startup use or erasure:** Extension startup, unlock-screen cancellation, and popup/overlay checks never erase, migrate, or read plaintext `settings.apiKey` or `friends` for API calls. While `vault` is absent, analysis is blocked.
+- **Verify-before-clear conversion protocol:**
+  1. User explicitly chooses **Encrypt saved data** in `options.html` and sets/confirms a new passphrase.
+  2. Inside `inVault`, re-read and re-validate legacy `settings` and `friends`. Encrypt `{ v: 1, apiKey, friends }` into a `vault` record.
+  3. Write `{ vault }` to `chrome.storage.local` **first**, leaving legacy `settings.apiKey` and `friends` intact.
+  4. Immediately read `vault` back from `chrome.storage.local`, decrypt and authenticate it with the new `CryptoKey`, and verify decrypted `apiKey` and `friends` match the source payload.
+  5. Only if step 4 succeeds: overwrite `settings` with `{ model, effort, threshold }` (omitting `apiKey`), `chrome.storage.local.remove('friends')`, and write `vaultKey` to `chrome.storage.session`.
+  - **Interruption recovery:**
+    - If interrupted before step 3 completes or if step 4 fails: remove any unverified partial `vault` written in that attempt; original plaintext remains untouched and retryable without combining records or dropping edits.
+    - If interrupted *between* step 4 and step 5 (so a valid `vault` exists alongside residual `settings.apiKey` or `friends`): startup treats the extension as **locked** using `vault` (never plaintext); on the next successful passphrase unlock (authenticating `vault`), the worker completes logical cleanup of residual `settings.apiKey` and `friends` without altering `vault`.
+- **Reset / forgotten passphrase:** Requires explicit confirmation identifying that the saved API key and all saved friends will be permanently removed. Canceling leaves `vault` (and any legacy data) intact. Confirming clears `vault`, legacy `friends`, `settings.apiKey` (resetting `settings` to defaults if unconvertible), and `vaultKey`.
+- **Cleanup limits disclosure:** `chrome.storage.local` removal/overwrite performs logical deletion via Chrome's storage API. Prior underlying storage compaction blocks or OS/browser profile backups created before encryption or reset are outside extension control and are documented in privacy/settings disclosures.
+
+### Threats and mitigations
+
+| Severity | Threat | Mitigation |
+|---|---|---|
+| **High** | Offline reading of Chrome profile / disk backups exposes API key or friend emails | Encrypt `apiKey` and all friend fields with AES-256-GCM under a PBKDF2-SHA256 (600,000 iterations) key; never store passphrase or `vaultKey` in `chrome.storage.local` or `sync`. |
+| **High** | Offline brute-force guessing against stolen `vault` | 128-bit random per-vault salt + 600,000 PBKDF2-SHA256 iterations; minimum 8-character non-whitespace passphrase; user-facing guidance on strong passphrases and no recovery backdoor. |
+| **High** | Content script or compromised site renderer reads `chrome.storage.local` or spoofs vault messages | Sensitive data in `chrome.storage.local` is encrypted; `chrome.storage.session` stays at `TRUSTED_CONTEXTS`; `VAULT_*` messages require `isSettingsSender` (`options.html` static origin) and reject content scripts and `overlay.html`. |
+| **Medium** | GCM nonce reuse breaks confidentiality/authenticity across writes | Generate a fresh 96-bit CSPRNG IV on every encryption; bind version and KDF parameters in AAD. |
+| **Medium** | Stale extension pages or late API responses leak data after Lock now | Increment `vaultEpoch` synchronously on lock, abort active `fetch`, discard pre-lock unlock/save/analysis results, clear `vaultKey` from `chrome.storage.session`, and broadcast `VAULT_LOCKED` so UI surfaces wipe DOM fields and results. |
+| **Medium** | Tampered, corrupted, or downgraded `vault` record causes silent plaintext fallback or crash | Strict envelope schema and KDF iteration bounds `[600000, 5000000]`; fail closed to `unreadable` state without overwriting `vault` or using legacy plaintext. |
+| **Medium** | Interrupted P3 conversion loses data or leaves plaintext active | Two-phase verify-before-clear: write `vault`, read back and GCM-authenticate before stripping `settings.apiKey` and removing `friends`; never use legacy plaintext while `vault` is absent or locked. |
+| **Medium** | Two open settings tabs overwrite each other's changes | Worker `inVault` serialization + `expectedRev` optimistic concurrency check + `VAULT_CHANGED` broadcast. |
+| **Low** | Accidental exposure of secrets in logs, error messages, diagnostics, or P2 exports | Never log passphrase, `vaultKey`, `apiKey`, or friend records; export requires unlock + click and outputs validated friends only, labeled as readable outside Chrome. |
+
+### Residual threats (accepted / disclosed)
+
+1. **While unlocked in an active Chrome session (P1):** `vaultKey` resides in `chrome.storage.session` (and `CryptoKey` / transient plaintext in service worker memory) until **Lock now** or browser close. An attacker with live OS memory access to the Chrome browser process, OS swap/hibernation files containing RAM pages, or local Chrome DevTools access to the extension background/settings pages while unlocked can recover the session key or decrypted data.
+2. **Prior disk snapshots and LevelDB compaction lag:** Profile backups, OS snapshots, or uncompacted LevelDB blocks written *before* P3 conversion or reset are outside Chrome's extension API and cannot be retroactively scrubbed by the extension. Users migrating a previously plaintext dev profile should rotate their Anthropic API key if prior disk exposure is a concern.
+3. **Weak user-chosen passphrases:** Offline resistance depends on passphrase entropy; a short or dictionary passphrase remains vulnerable to offline cracking if a disk copy of `vault` is obtained.
+4. **Anthropic API transport/processing while unlocked:** As disclosed in settings and `PRIVACY.md`, once unlocked and explicitly triggered by clicking **Find friends**, `apiKey` authorizes the HTTPS call to `https://api.anthropic.com` and included friends' names, skills, interests, and levels are sent to Anthropic.
 
 ## Handoff log
 
@@ -60,3 +416,20 @@ Security owns the crypto and session boundary decisions, including allowed sende
 |---|---|---|
 | Lead | User chose passphrase encryption for saved data. Existing release review round 3 passed for code, security, and design. Full suite passed 95/95 before encryption work. | PM |
 | PM | Drafted scope and P-01–P-10. Routed P1 unlock duration, P2 export, and P3 private development profile handling as needs-user decisions. No implementation started. | Lead and user |
+| Lead | Collected P1 (session unlock + Lock now), P2 (readable JSON export), P3 (explicit pre-encryption 2.0.0 conversion) from the user and updated `docs/specs/passphrase-storage.md`. | Security and Designer |
+| Security | Completed `## Security` section (PBKDF2-SHA256 600k + AES-256-GCM envelope with AAD, session `vaultKey` boundary, sender matrix, `inVault`/`vaultEpoch`/`expectedRev` concurrency rules, P2 export, P3 verify-before-clear + 1.x non-upgrade, threats and residual risks). | Lead |
+| Designer | Completed `## Design` section (settings `#vault` states, disclosure updates, P2 export label, P3 conversion and reset panels, popup & overlay locked/uninitialized/unreadable/mid-flight-lock states, and store/review screenshot plan). | Lead and QA |
+| Lead | Integrated `## Design` and `## Security` into `docs/specs/passphrase-storage.md` with aligned validation copy, `unreadable` handling in popup/overlay, and reset-panel scope. | QA |
+| QA | Wrote 15 failing tests in `test/vault.test.js` covering P-01–P-09 and verified red gate: `node --test test/vault.test.js` 0/15 pass, `npm test` 95/110 pass (all 95 existing tests green). Logged UI/Chrome screenshot checks. | Engineer |
+| Engineer | Implemented passphrase vault in `lib/core.js`, `background.js`, `options.*`, `popup.*`, `overlay.js`, updated `PRIVACY.md`/`DOCS.md`/`README.md`/`docs/store-listing.md`, and aligned `test/background.test.js` & `test/release.test.js`. `npm test` 110/110, `node --check` 7/7, `git diff --check` pass. | Lead |
+| Lead | Updated `docs/assets/harness/stub.js` & `render.js` and rendered store assets + 36 review screenshots into `dist/review-vault/`. | Reviewer, Designer, Security |
+| Security | Round 1 **PASS** — Verified PBKDF2-SHA256/AES-GCM envelope, AAD, session `vaultKey` boundary, sender matrix, concurrency guards, P2 export, P3 verify-before-clear + 1.x non-upgrade, and disclosures. | Lead |
+| Designer | Round 1 **FAIL** — Two findings: (1) `ui.css` `[aria-invalid="true"]` loses specificity to `input[type=...]`, leaving invalid passphrase borders grey; (2) `docs/assets/screenshot-3-settings.png` (1280x800) clips `#api-key` mid-input and pushes `#model` below the fold. | Lead |
+| Reviewer | Round 1 **FAIL** — Two blocking bugs in `background.js`: (1) `handleVaultConvertLegacy` deletes verified `vault` if cleanup/`session.set` throws after `cleanupResidualLegacy` starts; (2) `handleVaultSaveClaude`/`Friends` do not re-check `vaultEpoch` after `storage.local.set` before broadcasting `VAULT_CHANGED`/returning `ok: true` (plus non-blocking `options.js` `VAULT_CHANGED` suppression on remote reset, `running.delete` identity guard, and save deduplication). | QA, Engineer |
+| QA | Added 2 regression tests in `test/vault.test.js` for `handleVaultConvertLegacy` post-cleanup error preservation and `VAULT_LOCK` during `storage.local.set`. Confirmed red gate: 15/17 pass, both new regressions fail as expected. | Engineer |
+| Engineer | Fixed all Round 1 findings (`background.js` `wroteVault` ordering & `saveUnlockedVault` post-write epoch guard + `running.delete` identity check; `options.js` lock/remote-reset race guards; `ui.css` `[aria-invalid="true"]` specificity; `options.css` compact unlocked `#vault` layout; `render.js` narrow vault overlay captures). `npm test` 112/112, `node --check` 7/7, `git diff --check` pass. Re-rendered `docs/assets/` and `dist/review-vault-r2/`. | Reviewer, Designer, Security |
+| Security | Round 2 **PASS** — Verified `handleVaultConvertLegacy` `wroteVault` ordering, `saveUnlockedVault` post-write `vaultEpoch` guard, `analyzeOnce` `running.delete` identity check, `options.js` `LOCKED`/`VAULT_CHANGED` guards, and both new P-08/P-04 regression tests. | Lead |
+| Designer | Round 2 **PASS** — Verified `--error` borders in `settings-setup-mismatch-1280.png` and `settings-locked-error-1280.png`, compact `#vault.is-unlocked` fitting `screenshot-3-settings.png` cleanly in 1280x800, and narrow overlay captures (`dist/review-vault-r2/`). Whole-window `screenshot-2-popup.png` and live Chrome keyboard flow remain for manual Chrome walkthrough. | Lead |
+| Reviewer | Round 2 **FAIL** (1 finding in `options.js`) — Verified all Round 1 `background.js`, CSS, and test fixes, but `options.js:762` drops suppression of `confirmReset`'s own `VAULT_CHANGED (uninitialized)` broadcast, causing concurrent `loadVault` to wipe `#setup-status`. | Engineer |
+| Engineer | Fixed Round 2 finding in `options.js` (`options.js:762` checks `vaultBusy || msg.vaultState === 'unlocked'`; `options.js:280, 311, 352` call `loadVault({ focus: true })` on `LOCKED`). `npm test` 112/112, `node --check` 7/7, `git diff --check` pass. | Reviewer |
+| Reviewer | Round 3 **PASS** — Verified `options.js` reset-broadcast suppression (`vaultBusy || msg.vaultState === 'unlocked'`) and `loadVault` reconciliation on `LOCKED`, along with all Round 1–2 fixes. | QA |

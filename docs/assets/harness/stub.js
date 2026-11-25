@@ -28,9 +28,22 @@
   ];
 
   const store = {
-    settings: { apiKey: S === 'setup' || S === 'first-run' ? '' : 'sk-ant-demo-placeholder', model: 'claude-haiku-5-5', effort: 'low', threshold: 0.6 },
+    settings: { model: 'claude-haiku-5-5', effort: 'low', threshold: 0.6 },
+    apiKey: S === 'setup' || S === 'first-run' ? '' : 'sk-ant-demo-placeholder',
     friends: S === 'no-friends' || S === 'first-run' ? [] : FRIENDS.map(f => ({ ...f, notify: S !== 'no-friends-included' })),
     autoDetect: false,
+  };
+
+  const vaultStateFor = () => {
+    if (S === 'settings-setup' || S === 'settings-setup-mismatch' || S === 'vault-uninitialized') return 'uninitialized';
+    if (S === 'settings-p3-convert') return 'needs-conversion';
+    if (S === 'settings-locked' || S === 'settings-locked-error' || S === 'settings-reset-confirm' || S === 'vault-locked') return 'locked';
+    if (S === 'settings-unreadable' || S === 'vault-unreadable') return 'unreadable';
+    return 'unlocked';
+  };
+  const friendsStatusFor = () => {
+    if (!store.friends.length) return 'empty';
+    return store.friends.some(f => f.notify !== false) ? 'ok' : 'none-included';
   };
 
   const tabUrl = { 'page-chrome-blocks': 'chrome://newtab/', 'not-a-posting': 'http://kestrel-grid.localhost:8080/blog/heat-wave-forecasting' }[S] || POSTING_URL;
@@ -42,6 +55,7 @@
     results: { ok: true, result: { job: JOB, matches: MATCHES }, threshold: 0.6 },
     'no-matches': { ok: true, result: { job: JOB, matches: [] }, threshold: 0.6 },
     error: { ok: false, error: JN.describeApiError(429, { error: { type: 'rate_limit_error', message: 'Rate limited' } }) },
+    'locked-cleared': { ok: false, code: 'LOCKED' },
   })[S]; // loading: no reply, so the spinner stays
 
   const event = () => ({ addListener() {}, removeListener() {} });
@@ -62,10 +76,35 @@
       getURL: p => p,
       getManifest: () => JSON.parse(read('manifest.json')),
       openOptionsPage() {},
+      onMessage: event(),
       sendMessage: async msg => {
-        if (msg.type !== 'OVERLAY_STATE') return undefined;
-        const posting = JN.postingLabel({ title: 'Data Engineering Intern | Kestrel Grid', url: POSTING_URL, seenAt: Date.now() - 2 * 60000 });
-        return { state: 'prompt', posting, hasKey: S !== 'prompt-no-key' };
+        const vs = vaultStateFor();
+        if (msg?.type === 'VAULT_STATUS') {
+          return vs === 'needs-conversion'
+            ? { ok: true, vaultState: vs, legacySummary: { hasKey: true, friendCount: FRIENDS.length } }
+            : { ok: true, vaultState: vs };
+        }
+        if (msg?.type === 'VAULT_GET_DATA') {
+          return { ok: true, apiKey: store.apiKey, friends: structuredClone(store.friends), vaultRev: 'demo-rev-1' };
+        }
+        if (msg?.type === 'VAULT_UNLOCK') {
+          return S === 'settings-locked-error'
+            ? { ok: false, error: 'Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.' }
+            : { ok: true, vaultState: 'unlocked' };
+        }
+        if (msg?.type === 'VAULT_LOCK') return { ok: true, vaultState: 'locked' };
+        if (msg?.type === 'POPUP_STATUS') {
+          return vs === 'unlocked'
+            ? { vaultState: 'unlocked', hasKey: Boolean(store.apiKey), friendsStatus: friendsStatusFor() }
+            : { vaultState: vs };
+        }
+        if (msg?.type === 'OVERLAY_STATE') {
+          const posting = JN.postingLabel({ title: 'Data Engineering Intern | Kestrel Grid', url: POSTING_URL, seenAt: Date.now() - 2 * 60000 });
+          return vs === 'unlocked'
+            ? { state: 'prompt', posting, vaultState: 'unlocked', hasKey: S !== 'prompt-no-key' }
+            : { state: 'prompt', posting, vaultState: vs };
+        }
+        return undefined;
       },
       connect() {
         const listeners = [];
@@ -92,12 +131,25 @@
 
   addEventListener('DOMContentLoaded', async () => {
     if (page !== 'options.html') await until(() => button(page === 'overlay.html' ? 'Not now' : 'Find friends') || document.querySelector('#panel h2'));
-    const clicks = page === 'overlay.html' ? ['results'] : ['loading', 'results', 'no-matches', 'error'];
+    else await until(() => document.getElementById('vault-heading')?.textContent && (vaultStateFor() !== 'unlocked' || document.getElementById('api-key').value || S === 'first-run' || S === 'setup'));
+
+    const clicks = page === 'overlay.html' ? ['results', 'locked-cleared'] : ['loading', 'results', 'no-matches', 'error'];
     if (clicks.includes(S)) {
       button('Find friends').click();
       await until(() => !button('Find friends') && (page !== 'overlay.html' || document.querySelector('#state-heading').textContent !== 'Find friends for this job?'));
     }
     if (S === 'auto-detect-panel') document.getElementById('auto-toggle').click();
+    if (S === 'settings-setup-mismatch') {
+      document.getElementById('setup-passphrase').value = 'kestrel-passphrase';
+      document.getElementById('setup-confirm').value = 'different-passphrase';
+      document.getElementById('setup-submit').click();
+    } else if (S === 'settings-locked-error') {
+      document.getElementById('unlock-passphrase').value = 'wrong-passphrase';
+      document.getElementById('unlock-submit').click();
+      await until(() => document.getElementById('unlock-passphrase-error').textContent);
+    } else if (S === 'settings-reset-confirm') {
+      document.getElementById('forgot-btn').click();
+    }
     await new Promise(r => setTimeout(r, 300));
     if (document.activeElement) document.activeElement.blur(); // as after a mouse click: no focus ring in the shot
 

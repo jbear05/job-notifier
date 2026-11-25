@@ -11,11 +11,144 @@
 <main class="page">
   <header class="page-header">
     <h1>Job Notifier settings</h1>
-    <p class="lede">To start, add your Anthropic API key and at least one friend. Everything here is saved only in this browser.</p>
+    <p id="page-lede" class="lede">Your saved API key and friends list are locked in this browser.</p>
   </header>
 
+  <!-- 0. Passphrase vault -->
+  <section id="vault" class="section" aria-labelledby="vault-heading">
+    <div class="section-intro">
+      <h2 id="vault-heading" tabindex="-1">Unlock saved data</h2>
+      <p id="vault-subtitle" class="small muted">Your API key and friends list are encrypted.</p>
+    </div>
+    <div class="section-body">
+      <form id="setup-form" class="stack" novalidate hidden>
+        <div class="disclosure">
+          <p class="label">Before you create a passphrase</p>
+          <ul>
+            <li><strong>Encrypted in this Chrome profile.</strong> Your passphrase encrypts your Anthropic API key and friends list on disk.</li>
+            <li><strong>No recovery.</strong> Job Notifier has no server and cannot recover a forgotten passphrase. If you forget it, you will have to erase saved data and start over.</li>
+            <li><strong>Unlocked per Chrome session.</strong> Once unlocked, your data stays unlocked until you click <strong>Lock now</strong> or close Chrome.</li>
+          </ul>
+        </div>
+        <div class="field">
+          <label class="label" for="setup-passphrase">Passphrase</label>
+          <input id="setup-passphrase" type="password" autocomplete="off" spellcheck="false" aria-describedby="setup-passphrase-help setup-passphrase-error" />
+          <p id="setup-passphrase-help" class="small muted">At least 8 characters. Job Notifier cannot recover a forgotten passphrase.</p>
+          <p id="setup-passphrase-error" class="small error-text"></p>
+        </div>
+        <div class="field">
+          <label class="label" for="setup-confirm">Confirm passphrase</label>
+          <input id="setup-confirm" type="password" autocomplete="off" spellcheck="false" aria-describedby="setup-confirm-error" />
+          <p id="setup-confirm-error" class="small error-text"></p>
+        </div>
+        <div id="setup-pending" class="loading" role="status" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Encrypting and saving…</span>
+        </div>
+        <div class="actions">
+          <button type="submit" id="setup-submit" class="btn btn-primary">Create passphrase</button>
+          <p id="setup-status" class="small" role="status"></p>
+        </div>
+      </form>
+
+      <div id="convert-view" class="stack" hidden>
+        <div id="convert-error-block" class="error-block stack" hidden>
+          <p id="convert-error-heading" class="label" tabindex="-1">Couldn't encrypt saved data</p>
+          <p>Your existing data wasn't changed or deleted. Try creating your passphrase again.</p>
+        </div>
+        <form id="convert-form" class="stack" novalidate>
+          <div class="disclosure">
+            <p class="label">Existing saved data found</p>
+            <p id="convert-summary"></p>
+            <p>Create a passphrase to encrypt this data. Job Notifier checks that the encrypted copy can be read before removing the unencrypted original. Canceling or leaving this page leaves your existing data unchanged and locked.</p>
+          </div>
+          <div class="field">
+            <label class="label" for="convert-passphrase">Passphrase</label>
+            <input id="convert-passphrase" type="password" autocomplete="off" spellcheck="false" aria-describedby="convert-passphrase-help convert-passphrase-error" />
+            <p id="convert-passphrase-help" class="small muted">At least 8 characters. Job Notifier cannot recover a forgotten passphrase.</p>
+            <p id="convert-passphrase-error" class="small error-text"></p>
+          </div>
+          <div class="field">
+            <label class="label" for="convert-confirm">Confirm passphrase</label>
+            <input id="convert-confirm" type="password" autocomplete="off" spellcheck="false" aria-describedby="convert-confirm-error" />
+            <p id="convert-confirm-error" class="small error-text"></p>
+          </div>
+          <div id="convert-pending" class="loading" role="status" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Encrypting and verifying saved data…</span>
+          </div>
+          <div class="actions">
+            <button type="submit" id="convert-submit" class="btn btn-primary">Encrypt saved data</button>
+            <button type="button" id="convert-reset-toggle" class="btn-text">Erase existing data instead</button>
+          </div>
+          <p id="convert-error" class="small error-text" role="alert"></p>
+        </form>
+      </div>
+
+      <form id="unlock-form" class="stack" novalidate hidden>
+        <div class="field">
+          <label class="label" for="unlock-passphrase">Passphrase</label>
+          <input id="unlock-passphrase" type="password" autocomplete="off" spellcheck="false" aria-describedby="unlock-passphrase-help unlock-passphrase-error" />
+          <p id="unlock-passphrase-help" class="small muted">Unlocks your saved data for this Chrome session.</p>
+          <p id="unlock-passphrase-error" class="small error-text" role="alert"></p>
+        </div>
+        <div id="unlock-pending" class="loading" role="status" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Unlocking saved data…</span>
+        </div>
+        <div class="actions">
+          <button type="submit" id="unlock-submit" class="btn btn-primary">Unlock</button>
+          <button type="button" id="forgot-btn" class="btn-text">Forgot passphrase?</button>
+          <p id="unlock-status" class="small" role="status"></p>
+        </div>
+      </form>
+
+      <div id="unreadable-view" class="error-block stack" hidden>
+        <p class="label">Unable to unlock saved data</p>
+        <p>Job Notifier couldn't verify the stored vault. Your existing storage was left untouched.</p>
+        <div class="actions">
+          <button type="button" id="unreadable-reset-btn" class="btn btn-secondary">Erase and start fresh</button>
+        </div>
+      </div>
+
+      <div id="reset-panel" class="import-panel stack" hidden>
+        <h3 id="reset-heading" tabindex="-1">Forgot your passphrase?</h3>
+        <p>Job Notifier cannot unlock or recover your saved data without your passphrase. Starting fresh permanently deletes:</p>
+        <ul>
+          <li>Your saved Anthropic API key</li>
+          <li>Your entire saved friends list</li>
+        </ul>
+        <p class="small muted">Your model and match settings, Auto-detect preference, and any exported JSON files on your computer are not deleted.</p>
+        <div class="field">
+          <label class="check"><input id="reset-confirm-check" type="checkbox" aria-describedby="reset-confirm-error" /> Yes, permanently erase my saved API key and friends list</label>
+          <p id="reset-confirm-error" class="small error-text" role="alert"></p>
+        </div>
+        <div id="reset-pending" class="loading" role="status" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Erasing saved data…</span>
+        </div>
+        <div class="actions">
+          <button type="button" id="reset-confirm-btn" class="btn btn-secondary">Erase saved data</button>
+          <button type="button" id="reset-cancel-btn" class="btn-text">Cancel</button>
+        </div>
+      </div>
+
+      <div id="unlocked-view" class="stack" hidden>
+        <p>Your API key and friends list stay unlocked until you click Lock now or close Chrome.</p>
+        <div id="lock-pending" class="loading" role="status" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Locking…</span>
+        </div>
+        <div class="actions">
+          <button type="button" id="lock-btn" class="btn btn-secondary">Lock now</button>
+          <p id="vault-status" class="small" role="status"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- 1. Claude -->
-  <section id="claude" class="section" aria-labelledby="claude-heading">
+  <section id="claude" class="section" aria-labelledby="claude-heading" hidden>
     <div class="section-intro">
       <h2 id="claude-heading">Claude</h2>
       <p class="small muted">Job Notifier calls Claude with your own key. There is no Job Notifier server.</p>
@@ -26,8 +159,8 @@
         <ul>
           <li><strong>You pay Anthropic directly.</strong> Each time you click Find friends, Job Notifier sends one request to Anthropic's API with your key. It's billed to your Anthropic account at Anthropic's prices. Job Notifier itself is free. <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic API pricing</a></li>
           <li><strong>Sent to Anthropic:</strong> the job posting text (up to 8,000 characters), and each included friend's name, skills, interests, and level.</li>
-          <li><strong>Never sent:</strong> your friends' email addresses and any recruiter link you paste. They stay in this browser. Your API key goes only to Anthropic, to authorize each request.</li>
-          <li><strong>Stored unencrypted.</strong> Your key is saved unencrypted in this Chrome profile. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a></li>
+          <li><strong>Never sent:</strong> your friends' email addresses and any recruiter link you paste. They stay in this browser. Your API key goes only to Anthropic, to authorize each request. Your passphrase never leaves this browser.</li>
+          <li><strong>Encrypted with your passphrase.</strong> Your API key and friends list are encrypted in this Chrome profile and stay unlocked until you click Lock now or close Chrome. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a></li>
           <li>Nothing goes to the developer or to any analytics service. <a href="https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md" target="_blank" rel="noopener">Privacy policy</a></li>
         </ul>
       </div>
@@ -68,16 +201,16 @@
       </details>
 
       <div class="actions">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" id="claude-save" class="btn btn-primary">Save</button>
         <p id="claude-status" class="small" role="status"></p>
       </div>
     </form>
   </section>
 
   <!-- 2. Friends -->
-  <section id="friends" class="section" aria-labelledby="friends-heading">
+  <section id="friends" class="section" aria-labelledby="friends-heading" hidden>
     <div class="section-intro">
-      <h2 id="friends-heading">Friends</h2>
+      <h2 id="friends-heading" tabindex="-1">Friends</h2>
       <p class="small muted">People you might pass a job to. Email addresses stay in this browser.</p>
     </div>
     <div class="section-body">
@@ -91,7 +224,7 @@
           <button type="button" id="export-btn" class="btn-text">Export JSON</button>
           <input type="file" id="import-file" accept=".json,application/json" hidden />
         </div>
-        <p id="export-note" class="small muted">Exports include email addresses. Keep the file private.</p>
+        <p id="export-note" class="small muted">Exports a readable, unencrypted JSON file of your friends list (including email addresses, excluding your API key). Anyone with this file can read it outside Chrome.</p>
         <p id="friends-status" class="small" role="status"></p>
         <p id="import-error" class="small error-text" role="alert"></p>
       </div>
@@ -175,12 +308,12 @@
       <h2 id="privacy-heading">Privacy and data</h2>
     </div>
     <div class="section-body">
-      <p>Your key, settings, and friends are stored only in this browser. Job postings you view are kept in memory until you close their tab or Chrome.</p>
+      <p>Your API key, settings, and friends are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or close Chrome. Job postings you view are kept in memory until you close their tab or Chrome.</p>
       <p class="actions">
         <a href="https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md" target="_blank" rel="noopener">Read the privacy policy</a>
         <a href="https://github.com/jbear05/job-notifier/issues" target="_blank" rel="noopener">Report a problem</a>
       </p>
-      <p>To delete everything Job Notifier stored, remove it from Chrome's Extensions page. To remove only your key, clear the key field and save.</p>
+      <p>To delete everything Job Notifier stored, use Forgot passphrase? to erase saved data or remove it from Chrome's Extensions page. To remove only your key, unlock settings, clear the key field, and save.</p>
     </div>
   </section>
 

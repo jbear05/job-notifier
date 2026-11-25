@@ -1,13 +1,14 @@
 // The confirmation prompt and results, in the frame content.js adds to a tab
 // (spec Design: Confirmation prompt and results overlay). Its only input is the
-// service worker's replies for this tab (engineer A's contract): it never reads
-// its own address, the host page, or window messages (criteria 30, 31).
+// service worker's replies for this tab: it never reads its own address, the
+// host page, or window messages (criteria 30, 31).
 
 const $ = id => document.getElementById(id);
 const heading = $('state-heading');
 let state = 'none';
 let posting = null;
 let recheck = false; // the shown state sent the user to settings; ask the worker again when they come back
+let overlayEpoch = 0;
 
 function show(name, title, nodes, { error = false, describe = false } = {}) {
   state = name;
@@ -26,35 +27,70 @@ function close() {
 }
 
 async function load() {
+  const myEpoch = overlayEpoch;
   let reply;
   try {
     reply = await chrome.runtime.sendMessage({ type: 'OVERLAY_STATE' });
   } catch (e) {
     reply = null;
   }
+  if (myEpoch !== overlayEpoch) return;
   if (!reply || reply.state !== 'prompt') return close();
   posting = reply.posting;
   $('scrim').hidden = false;
   $('dialog').hidden = false;
-  showPrompt(reply.hasKey);
+  showPrompt(reply.vaultState || 'unlocked', !!reply.hasKey);
   // The host frame remains noninteractive until this prompt is in the DOM.
   await chrome.runtime.sendMessage({ type: 'OVERLAY_READY' }).catch(() => {});
   if (state === 'prompt') heading.focus();
 }
 
-function showPrompt(hasKey) {
-  recheck = !hasKey;
+function postingBlock() {
+  return h('div', { class: 'posting' },
+    h('p', { class: 'posting-title' }, posting.title),
+    h('p', { class: 'small muted' }, posting.meta));
+}
+
+function showPrompt(vaultState, hasKey) {
+  let body;
+  let primary;
+
+  if (vaultState === 'uninitialized' || vaultState === 'needs-conversion') {
+    recheck = true;
+    body = "Set up Job Notifier in settings first. You'll create a passphrase, add your Anthropic API key, and add at least one friend.";
+    primary = btn('Open settings', () => openSettings(), 'primary');
+  } else if (vaultState === 'locked') {
+    recheck = true;
+    body = 'Your saved API key and friends list are locked. Open settings to unlock them, then return here to run the check.';
+    primary = btn('Open settings to unlock', () => openSettings(), 'primary');
+  } else if (vaultState === 'unreadable') {
+    recheck = true;
+    body = "Your saved data can't be read. Open settings to inspect or reset it.";
+    primary = btn('Open settings', () => openSettings(), 'primary');
+  } else if (!hasKey) {
+    recheck = true;
+    body = 'Add your Anthropic API key in settings first. Job Notifier needs it to match this posting to your friends.';
+    primary = btn('Open settings', () => openSettings(), 'primary');
+  } else {
+    recheck = false;
+    body = "Job Notifier will send this posting's text and your included friends' names, skills, interests, and level to Claude. It's billed to your Anthropic API key.";
+    primary = btn('Find friends', analyze, 'primary');
+  }
+
   show('prompt', 'Find friends for this job?', [
-    h('div', { class: 'posting' },
-      h('p', { class: 'posting-title' }, posting.title),
-      h('p', { class: 'small muted' }, posting.meta)),
-    h('p', { id: 'prompt-body' }, hasKey
-      ? "Job Notifier will send this posting's text and your included friends' names, skills, interests, and level to Claude. It's billed to your Anthropic API key."
-      : 'Add your Anthropic API key in settings first. Job Notifier needs it to match this posting to your friends.'),
-    row(
-      hasKey ? btn('Find friends', analyze, 'primary') : btn('Open settings', () => openSettings(), 'primary'),
-      btn('Not now', close)),
+    postingBlock(),
+    h('p', { id: 'prompt-body' }, body),
+    row(primary, btn('Not now', close)),
   ], { describe: true });
+}
+
+function showLockedCleared() {
+  overlayEpoch++;
+  recheck = true;
+  show('locked-cleared', 'Job Notifier is locked', [
+    h('p', null, 'Your saved API key and friends list were locked, so any results were cleared. Open settings to unlock.'),
+    row(btn('Open settings to unlock', () => openSettings(), 'primary'), btn('Close', close)),
+  ]);
 }
 
 function showNoFriends(status) {
@@ -65,11 +101,16 @@ function showNoFriends(status) {
 
 // Find friends and Try again. No job text is sent; the worker uses the posting it recorded for this tab.
 async function analyze() {
+  const myEpoch = overlayEpoch;
   recheck = false;
   show('loading', COPY.loading[0], [loadingView()]);
   const reply = await analyzeRequest({ type: 'ANALYZE_TAB' }, 90000);
+  if (myEpoch !== overlayEpoch) return;
   if (reply.ok) return showResult(reply.result, reply.threshold);
-  if (reply.code === 'NO_API_KEY') return showPrompt(false);
+  if (reply.code === 'LOCKED') return showLockedCleared();
+  if (reply.code === 'UNINITIALIZED' || reply.code === 'NEEDS_CONVERSION') return showPrompt('uninitialized', false);
+  if (reply.code === 'UNREADABLE') return showPrompt('unreadable', false);
+  if (reply.code === 'NO_API_KEY') return showPrompt('unlocked', false);
   if (reply.code === 'NO_FRIENDS') return showNoFriends(reply.friends);
   if (reply.code === 'NO_POSTING') return close();
   const error = reply.error || JN.ERRORS.incomplete;
@@ -114,6 +155,14 @@ $('scrim').addEventListener('click', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (recheck && document.visibilityState === 'visible') {
+    recheck = false;
+    load();
+  }
+});
+chrome.runtime.onMessage.addListener(msg => {
+  if (msg?.type === 'VAULT_LOCKED' && state !== 'none') {
+    showLockedCleared();
+  } else if (msg?.type === 'VAULT_CHANGED' && recheck && document.visibilityState === 'visible') {
     recheck = false;
     load();
   }

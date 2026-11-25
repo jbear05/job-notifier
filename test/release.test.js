@@ -208,16 +208,17 @@ test('criterion 15: the settings page explains cost and data use above the key f
   const key = html.search(/id="api-key"/);
   assert.ok(key > 0, 'options.html has the api-key field');
   for (const phrase of ['billed to your Anthropic account', '8,000 characters', 'skills, interests, and level',
-    'Never sent', 'email addresses', 'recruiter link', 'unencrypted', 'spend limit']) {
+    'Never sent', 'email addresses', 'recruiter link', 'Encrypted with your passphrase', 'spend limit']) {
     const i = lower.indexOf(phrase.toLowerCase());
     assert.ok(i >= 0 && i < key, `"${phrase}" should appear before the API key field`);
   }
 });
 
-test('criterion 34: settings page masks the key and says it is stored unencrypted', () => {
+test('criterion 34 / P-09: settings page masks the key and states passphrase encryption and lock lifetime', () => {
   const html = read('options.html');
   assert.match(html, /<input\b(?=[^>]*\bid="api-key")(?=[^>]*\btype="password")[^>]*>/);
-  assert.match(html, /unencrypted/i);
+  assert.match(html, /Encrypted with your passphrase/i);
+  assert.match(html, /Lock now/i);
   assert.match(html, /spend limit/i);
 });
 
@@ -227,7 +228,7 @@ test('criterion 16: PRIVACY.md covers reading, storage, sending, deletion, and c
   const p = read('PRIVACY.md');
   for (const re of [/visible text/i, /chrome\.storage\.local/, /chrome\.storage\.session/, /Anthropic/, /analytics/i,
     /uninstall/i, /https:\/\/(www\.)?anthropic\.com\/[^\s)]*privacy/i, /https:\/\/github\.com\/[^\s)]+\/issues/,
-    /unencrypted/i, /spend limit/i]) {
+    /passphrase/i, /encrypted/i, /spend limit/i]) {
     assert.match(p, re);
   }
   assert.doesNotMatch(p, /[\w.+-]+@[\w-]+\.[a-z]{2,}/i, 'no email address is published (Decision 10)');
@@ -311,6 +312,7 @@ test('criterion 21: store assets are the required sizes, PNG without alpha', () 
     ['docs/assets/screenshot-1-overlay.png', 1280, 800],
     ['docs/assets/screenshot-2-popup.png', 1280, 800],
     ['docs/assets/screenshot-3-settings.png', 1280, 800],
+    ['docs/assets/screenshot-4-prompt.png', 1280, 800],
     ['docs/assets/promo-440x280.png', 440, 280],
   ]) {
     const p = pngSize(f);

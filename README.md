@@ -12,9 +12,16 @@ To build it from source instead, see [Development](#development).
 
 ## Set up
 
-You need an Anthropic API key and at least one friend on your list.
+You need a passphrase (to encrypt your saved data in Chrome), an Anthropic API key, and at least one friend on your list.
 
-### 1. Get an Anthropic API key
+### 1. Create a passphrase
+
+On first run, Job Notifier settings asks you to create a passphrase (at least 8 characters). Your passphrase encrypts your Anthropic API key and friends list on disk in this Chrome profile.
+
+- **No recovery:** Job Notifier has no server and cannot recover a forgotten passphrase. If you forget it, use **Forgot passphrase?** in settings to erase your saved key and friends list and start fresh.
+- **Session unlock:** Once you unlock settings, your saved data stays unlocked for the current Chrome session until you click **Lock now** (in settings or the popup) or close Chrome.
+
+### 2. Get an Anthropic API key
 
 1. Sign in to the [Claude Console](https://platform.claude.com/) (create an Anthropic account if you don't have one).
 2. Add credit under **Billing**. The API is prepaid and separate from any Claude.ai subscription.
@@ -23,9 +30,9 @@ You need an Anthropic API key and at least one friend on your list.
 
 **What it costs.** Job Notifier is free. Each time you click **Find friends**, it sends one request to Anthropic, and Anthropic bills that request to your account at its [API prices](https://platform.claude.com/docs/en/about-claude/pricing). The cost depends on the model, the length of the posting (up to 8,000 characters are sent), and how many friends are included. Settings offers Claude Haiku 5.5 (the default and lowest cost), Claude Sonnet 5.5, and Claude Opus 5.5. Haiku is usually enough for matching. Opening the popup or browsing never costs anything.
 
-Your key is stored unencrypted in your Chrome profile. To cap what it can ever cost, set a [spend limit](https://platform.claude.com/settings/spend-limits) in the Claude Console.
+Your API key and friends list are encrypted with your passphrase in your Chrome profile. To cap what it can ever cost, set a [spend limit](https://platform.claude.com/settings/spend-limits) in the Claude Console.
 
-### 2. Add friends
+### 3. Add friends
 
 In settings, under **Friends**, click **Add friend** and fill in:
 
@@ -52,16 +59,17 @@ Each change saves right away. Use **Edit** and **Remove** on a row to change it.
 ]
 ```
 
-`contact` is the email address (or `""`), and `notify: false` excludes that friend. Imports are limited to 1 MB and 500 friends, and other fields are dropped. If your list already has friends, you choose whether to add to it or replace it. A file that fails to import leaves your list unchanged. Exports include email addresses, so keep the file private.
+`contact` is the email address (or `""`), and `notify: false` excludes that friend. Imports are limited to 1 MB and 500 friends, and other fields are dropped. If your list already has friends, you choose whether to add to it or replace it. A file that fails to import leaves your list unchanged. **Export JSON** writes a readable, unencrypted JSON file of your friends list (including email addresses, excluding your API key), so keep the file private.
 
 ## Use it
 
 ### From the toolbar
 
-1. Open a job posting and click the Job Notifier toolbar button.
-2. The popup shows the posting's text. Check it, or paste the posting yourself if the page couldn't be read.
-3. Click **Find friends**. After a few seconds you'll see the job summary and a card for each friend who scored at or above your match threshold.
-4. Edit any draft. Then use **Open email** to open it in your email app (you still press Send there) or **Copy** to copy it.
+1. Unlock Job Notifier in settings if you restarted Chrome or clicked **Lock now**.
+2. Open a job posting and click the Job Notifier toolbar button.
+3. The popup shows the posting's text. Check it, or paste the posting yourself if the page couldn't be read.
+4. Click **Find friends**. After a few seconds you'll see the job summary and a card for each friend who scored at or above your match threshold.
+5. Edit any draft. Then use **Open email** to open it in your email app (you still press Send there) or **Copy** to copy it.
 
 With two or more matches, **Open next email** opens the checked drafts one per click, since browsers allow only one new email window per click. **Copy all** copies every checked draft as one block. If you have the recruiter's LinkedIn for the role, paste it in the recruiter field and it's added to each email. That link stays in the browser and isn't sent to Claude.
 
@@ -77,8 +85,8 @@ Auto-detect is **off** until you turn it on. When it's on, Job Notifier notices 
 
 ## Privacy
 
-- Your key, settings, and friends are stored only in this browser (`chrome.storage.local`). With auto-detect on, postings you view (text, title, and the site's hostname) are kept in memory until you close that tab or Chrome.
-- Data leaves your browser only when you click **Find friends**, and only to Anthropic: the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level. Friends' email addresses and recruiter links are never sent.
+- Your API key and friends list are encrypted with your passphrase and stored in this browser (`chrome.storage.local`). Your passphrase is never saved. Once unlocked, a session key lives in `chrome.storage.session` until you click **Lock now** or close Chrome. With auto-detect on, postings you view (text, title, and the site's hostname) are kept in memory until you close that tab or Chrome.
+- Data leaves your browser only when you click **Find friends**, and only to Anthropic: the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level. Friends' email addresses, your passphrase, and recruiter links are never sent.
 - There are no analytics and no developer server.
 
 The full policy is in [PRIVACY.md](PRIVACY.md).
@@ -89,12 +97,16 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 |---|---|
 | `activeTab` | Reads the posting on the tab where you clicked the toolbar button, and only that tab. |
 | `scripting` | Runs the page-reading script on that tab, and registers the auto-detect script when you turn auto-detect on. |
-| `storage` | Saves your settings, key, and friends in this browser, and postings you view in memory until you close that tab or Chrome. |
+| `storage` | Saves your encrypted key and friends plus settings in this browser, and the session unlock key and postings you view in memory until you lock or close Chrome. |
 | `clipboardWrite` | Lets **Copy** and **Copy all** put drafts on your clipboard. |
 | `https://api.anthropic.com/*` | Sends the analysis request to Anthropic's API with your key. It's the only server Job Notifier contacts. |
 | `https://*/*` and `http://*/*` (optional) | Requested only when you turn on auto-detect, to spot postings and confirmations on job sites. Removed when you turn it off. |
 
 ## Troubleshooting
+
+**The popup or overlay says Job Notifier is locked.** Click **Open settings to unlock** and enter your passphrase. Once unlocked, your data stays unlocked until you click **Lock now** or close Chrome.
+
+**I forgot my passphrase.** Job Notifier cannot recover a forgotten passphrase. In settings, click **Forgot passphrase?** to permanently erase your saved API key and friends list and create a new passphrase.
 
 **The popup says it couldn't read the page.** Reload the tab and open Job Notifier again. Or paste the posting text into the box.
 
@@ -126,8 +138,9 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 ## Removing your data
 
 - **Everything:** remove Job Notifier on `chrome://extensions`, or right-click its toolbar button and choose **Remove from Chrome**. Chrome deletes everything it stored.
-- **Only your API key:** in settings, clear the key field and click **Save**. Revoke the key in the Claude Console too if you no longer need it.
-- **Friends:** click **Remove** on each one in settings.
+- **Saved API key and friends list:** in settings, click **Forgot passphrase?** -> **Erase saved data**.
+- **Only your API key:** unlock settings, clear the key field, and click **Save**. Revoke the key in the Claude Console too if you no longer need it.
+- **Friends:** unlock settings and click **Remove** on each one.
 - **Recent postings:** close the tab, or close Chrome.
 
 ## Development
