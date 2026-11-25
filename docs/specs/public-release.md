@@ -151,6 +151,7 @@ Do these in order. Tasks marked [Qn] wait for the user's answer.
 18. **Fonts:** the user approved downloading Fraunces 600 and IBM Plex Sans 400/600 (latin woff2, via Fontsource on jsDelivr) plus both OFL license files into fonts/. Done by the team lead; see the handoff log.
 19. **Store summary / manifest description:** "Finds friends who'd fit a job posting and drafts a message to each. Uses your own Anthropic API key." (engineer B's suggestion, approved by the user)
 20. **Upgrades from 1.x:** no migration. A stored `claude-opus-5-5` stays (it's on the allowlist). 1.x was never public; the user can switch models in settings.
+21. **Encryption at rest:** the user chose passphrase encryption for the saved API key and friend records before the public release. This replaces the unencrypted storage and disclosure portions of criterion 34. The scoped design and acceptance criteria are tracked in [passphrase storage](passphrase-storage.md).
 
 ## Security
 
@@ -835,3 +836,21 @@ All three .woff2 files start with the `wOF2` signature. Both license texts are S
 - Designer **PASS** for the rendered UI and generated store assets. Verified the settings width cap, mobile layout, one first-run Add friend action, updated retention, and the prompt and results layouts. The real-Chrome toolbar capture and live keyboard/focus evidence remain pending under the original manual gate.
 - Security **FAIL**. Confirmed the premature ready signal and the prompt lookup ordering. `STOP` also leaves an already open frame on the page. The dynamic sender scheme plus matching browser-supplied extension ID passes code inspection. The focused suite passed 53/53.
 - Next owners: QA to run regression tests red, then engineer to fix and return for review. The clean-profile Chrome walkthrough must include an inert frame on initialization failure, removal and focus restoration when auto-detect stops, and confirmation cleanup versus same-document URL changes.
+
+**QA, round 2 red gate:**
+- `node --test --test-reporter=spec test/background.test.js test/content.test.js` ran before any runtime changes. Four existing tests passed and eight new tests failed for the expected reasons. The full suite had 87 passes and those same eight failures. Covered two navigation races, two readiness cases, pointer interaction before readiness, STOP cleanup, hostname-only storage and the worker deadline.
+- Next owner: engineer, then reviewer and security. QA re-runs the full suite after review.
+
+**PM and team lead, Web Store policy decision (needs the user):**
+- The approved criterion 34 stores and discloses an unencrypted API key and stores friend records on disk. [Chrome Web Store User Data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq), especially questions 3, 4 and 9, describes a strong encryption requirement at rest. The lead confirmed the source and asked the user to choose passphrase-encrypted local storage, session-only sensitive data, or a pause to clarify the policy with Google. Changes to the storage design await the decision.
+
+**Engineer and QA, round 2 fixes:**
+- Serialized prompt reads with navigation cleanup and rejected in-flight work for an invalidated tab. The overlay authorizes readiness, analysis, and close by browser frame and document identifiers. Readiness is sent after the overlay renders, via the worker to the content script. It carries no user data, and the host page receives no frame message. The iframe leaves page clicks alone until ready. `STOP` removes it and restores focus.
+- Stored posting hostnames without scheme or port. The worker request deadline is 25 seconds with matching UI copy. The overlay retains its 90-second fallback and disconnect handling.
+- QA corrected mock document IDs to behave like Chrome's opaque identifiers across same-document URL changes. No original expectations changed. The focused suite passed 12/12 and the full suite passed 95/95. The exact Bash syntax check and `git diff --check` passed.
+
+**Team lead, round 3 reviews:**
+- Reviewer **PASS** for navigation and queue ordering, authenticated readiness and cleanup, timeout, and posting storage. Full suite 95/95.
+- Security **PASS** for the runtime fixes. Focused suite 61/61. Dynamic sender metadata, permission changes, frame loading, and clipboard/focus checks still need Chrome evidence.
+- Designer **PASS** on the 22 re-rendered screenshots in `dist/review-round3/`. Twenty-one match the prior approved PNGs byte for byte. The loading spinner was at a different animation frame. The whole-window popup capture remains assigned to the user.
+- The user answered the storage question and chose passphrase encryption. See Decision 21. This adds a spec and a new implementation and review cycle before release. The verified round 2 fixes are checkpointed separately.

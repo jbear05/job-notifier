@@ -3,18 +3,14 @@
 Spec: [docs/specs/public-release.md](docs/specs/public-release.md). Branch: `feat/public-release` (stacked on `chore/claude-test-hook`, PR #4).
 
 ## Done
-- Spec with 38 acceptance criteria; all user decisions recorded (Decisions 1–20).
-- Secret/history check: no API key ever committed (criterion 1).
-- Design and Security sections; fonts downloaded with checksums (criterion 38).
-- Tests: 82 in `test/core.test.js` and `test/release.test.js`.
-- Engineer A: lib/core.js helpers, background.js, content.js (detection + iframe), manifest v2.0.0, CI update, friends.json removed.
-- Engineer B: PRIVACY.md, LICENSE (MIT), README, DOCS.md, docs/store-listing.md, packaging script, .gitattributes.
+- Public release implementation, documentation, package, and store assets are in place through the reviewed runtime checkpoint `5a993bf`. The settings image is current and the store has a fourth image for the confirmation prompt.
+- Reviewer, designer, and security passed round 3 for the navigation, overlay, and storage-scope fixes. Full suite passed 95/95, exact Bash syntax check passed, and the checkpoint ZIP contained only runtime files with no production-shaped key. The headless visual review covered 22 screenshots.
+- The user chose passphrase encryption for API keys and friend records as part of v2.0.0. See Decision 21 and the [draft passphrase storage spec](docs/specs/passphrase-storage.md).
 
 ## Next
-- Engineer C: overlay.html/js/css, popup and settings restyle, friends form, auto-detect switch, icon SVGs. Started (ui.css, ui.js), interrupted by a usage limit.
-- Engineer D: rasterize icons, make store screenshots and promo tile (criterion 21).
-- Reviews: reviewer, designer (screenshots), security. Then qa full run, pm close-out and retro.
-- Real-Chrome walkthrough (criterion 23 and the manual checks in the spec's handoff log), including whether `use_dynamic_url` breaks the overlay's sender check.
+- Record the remaining passphrase decisions, specify design and security details, then run the test-first implementation and review cycle. Update store copy and screenshots to match.
+- Build and verify the final ZIP, run the user's clean-profile Chrome walkthrough, and replace the popup store screenshot with a whole-window capture. Open the release PR and verify remote CI after those checks. PR #4 was still open when checked.
+- PM closeout and retro after verification. Record the previously approved exception for the owner's email in public history and the intentional red runs reported in the handoff.
 
 ## Blocked
-- Nothing blocked on the user. The real-Chrome walkthrough needs someone to load the extension unpacked in Chrome; the team can't do that from here.
+- Passphrase implementation awaits decisions on unlock duration, friends export format, and existing private prerelease data. The local ZIP built from `5a993bf` still uses the earlier storage design. It is a checkpoint build for testing and needs rebuilding after encryption.
