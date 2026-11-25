@@ -5,6 +5,7 @@
 let overlayShown = false;
 let currentMatches = [];
 let currentJob = null;
+let recruiterUrl = ''; // optional, local only: never sent to Claude
 let checkTimer = null;
 let lastUrl = location.href;
 let lastReportedHash = null;
@@ -104,6 +105,7 @@ function triggerAutoAnalysis() {
     }
     currentJob = response.result.job;
     currentMatches = response.result.matches || [];
+    recruiterUrl = '';
     renderOverlayResults();
   });
 
@@ -274,6 +276,25 @@ function injectStyles() {
     .jn-copy-btn:hover { border-color: #bbb; background: #f5f5f5; }
     .jn-copy-btn:disabled { opacity: 0.55; cursor: default; }
 
+    /* ── Recruiter contact ── */
+    .jn-recruiter {
+      border: 1.5px dashed #e2e0f8; border-radius: 12px;
+      padding: 12px 14px; margin-bottom: 14px;
+    }
+    .jn-recruiter-label { display: block; font-weight: 600; font-size: 12.5px; color: #333; margin-bottom: 2px; }
+    .jn-recruiter-sub { color: #999; font-size: 11.5px; margin-bottom: 8px; }
+    .jn-recruiter-input {
+      width: 100%; border: 1.5px solid #ebebeb; border-radius: 8px;
+      padding: 8px 10px; font-family: inherit; font-size: 12.5px; color: #222;
+      background: #fff; outline: none; transition: border-color 0.15s;
+    }
+    .jn-recruiter-input:focus { border-color: #5b5bd6; }
+    .jn-recruiter-input.jn-invalid { border-color: #e0a19a; }
+    .jn-recruiter-status { font-size: 11.5px; margin-top: 6px; }
+    .jn-recruiter-status:empty { display: none; }
+    .jn-recruiter-status.jn-ok { color: #15622f; }
+    .jn-recruiter-status.jn-bad { color: #c0392b; }
+
     /* ── Send all ── */
     .jn-send-all-btn {
       display: block; width: 100%; margin-top: 6px; padding: 12px;
@@ -387,6 +408,16 @@ function renderOverlayResults() {
     `).join('')
     : `<div class="jn-empty">No strong matches for this posting.</div>`;
 
+  const recruiterHtml = count
+    ? `<div class="jn-recruiter">
+         <label class="jn-recruiter-label" for="jn-recruiter-input">Do you have a recruiter contact for this position?</label>
+         <div class="jn-recruiter-sub">Optional. Paste their LinkedIn and it's added to each email and to Copy all.</div>
+         <input id="jn-recruiter-input" class="jn-recruiter-input" type="url" inputmode="url" autocomplete="off"
+                placeholder="https://www.linkedin.com/in/…" value="${esc(recruiterUrl)}">
+         <div class="jn-recruiter-status" aria-live="polite"></div>
+       </div>`
+    : '';
+
   const bulkHtml = count > 1
     ? `<div class="jn-bulk-actions">
          <button class="jn-send-all-btn">Open next email</button>
@@ -396,7 +427,23 @@ function renderOverlayResults() {
     : '';
 
   const body = modal.querySelector('.jn-body');
-  body.innerHTML = jobHtml + matchesHtml + bulkHtml;
+  body.innerHTML = jobHtml + recruiterHtml + matchesHtml + bulkHtml;
+
+  const recruiterInput = body.querySelector('.jn-recruiter-input');
+  const recruiterStatus = body.querySelector('.jn-recruiter-status');
+  function updateRecruiter() {
+    const raw = recruiterInput.value;
+    const url = JN.normalizeRecruiterUrl(raw);
+    recruiterUrl = url || '';
+    const bad = url === null;
+    recruiterInput.classList.toggle('jn-invalid', bad);
+    recruiterStatus.className = `jn-recruiter-status ${bad ? 'jn-bad' : url ? 'jn-ok' : ''}`;
+    recruiterStatus.textContent = bad
+      ? "That doesn't look like a LinkedIn link, so it won't be included."
+      : url ? 'Added to your emails.' : '';
+  }
+  recruiterInput?.addEventListener('input', updateRecruiter);
+  if (recruiterInput) updateRecruiter();
 
   body.querySelectorAll('.jn-message-box').forEach(ta => {
     ta.addEventListener('input', e => {
@@ -417,7 +464,7 @@ function renderOverlayResults() {
     sendAllBtn.disabled = !left;
   }
   function send(i) {
-    window.open(JN.mailtoUrl(currentMatches[i], currentJob));
+    window.open(JN.mailtoUrl(currentMatches[i], currentJob, recruiterUrl));
     sent.add(i);
     updateSendAll();
   }
@@ -431,7 +478,8 @@ function renderOverlayResults() {
 
   body.querySelectorAll('.jn-card-actions .jn-copy-btn').forEach(btn => {
     btn.addEventListener('click', async e => {
-      await navigator.clipboard.writeText(currentMatches[parseInt(e.target.dataset.index)].message).catch(() => {});
+      const m = currentMatches[parseInt(e.target.dataset.index)];
+      await navigator.clipboard.writeText(JN.withRecruiter(m.message, recruiterUrl)).catch(() => {});
       flashBtn(e.target, 'Copied!');
     });
   });
@@ -445,7 +493,7 @@ function renderOverlayResults() {
 
   body.querySelector('.jn-copy-all-btn')?.addEventListener('click', async e => {
     const selected = checkedIndexes().map(i => currentMatches[i]);
-    await navigator.clipboard.writeText(JN.combinedMessages(selected, currentJob)).catch(() => {});
+    await navigator.clipboard.writeText(JN.combinedMessages(selected, currentJob, recruiterUrl)).catch(() => {});
     flashBtn(e.target, 'Copied!');
   });
 

@@ -1,5 +1,6 @@
 let currentMatches = [];
 let currentJob = null;
+let recruiterUrl = ""; // optional, local only: never sent to Claude
 
 document.addEventListener("DOMContentLoaded", init);
 
@@ -14,6 +15,7 @@ async function init() {
   document.getElementById("manual-analyze-btn").addEventListener("click", onAnalyzeClick);
   document.getElementById("send-all-btn").addEventListener("click", sendNext);
   document.getElementById("copy-all-btn").addEventListener("click", copyAll);
+  document.getElementById("recruiter-input").addEventListener("input", updateRecruiter);
 
   const { settings } = await chrome.storage.local.get("settings");
   if (!settings?.apiKey) {
@@ -105,6 +107,9 @@ function renderResults() {
   document.getElementById("empty-state").hidden = count > 0;
   document.getElementById("bulk-actions").hidden = count < 2;
   document.getElementById("bulk-hint").hidden = count < 2;
+  document.getElementById("recruiter").hidden = count === 0;
+  document.getElementById("recruiter-input").value = "";
+  updateRecruiter();
 
   matchList.innerHTML = currentMatches.map((m, i) => `
     <div class="match-card" data-index="${i}">
@@ -136,7 +141,8 @@ function renderResults() {
   });
   matchList.querySelectorAll(".copy-btn").forEach(btn => {
     btn.addEventListener("click", async e => {
-      await copyToClipboard(currentMatches[parseInt(e.target.dataset.index)].message);
+      const m = currentMatches[parseInt(e.target.dataset.index)];
+      await copyToClipboard(JN.withRecruiter(m.message, recruiterUrl));
       flashButton(e.target, "Copied!");
     });
   });
@@ -150,7 +156,7 @@ function checkedIndexes() {
 }
 
 function send(i) {
-  window.open(JN.mailtoUrl(currentMatches[i], currentJob));
+  window.open(JN.mailtoUrl(currentMatches[i], currentJob, recruiterUrl));
   sent.add(i);
   updateSendAll();
 }
@@ -171,8 +177,21 @@ function updateSendAll() {
 
 async function copyAll(e) {
   const selected = checkedIndexes().map(i => currentMatches[i]);
-  await copyToClipboard(JN.combinedMessages(selected, currentJob));
+  await copyToClipboard(JN.combinedMessages(selected, currentJob, recruiterUrl));
   flashButton(e.target, "Copied!");
+}
+
+function updateRecruiter() {
+  const input = document.getElementById("recruiter-input");
+  const status = document.getElementById("recruiter-status");
+  const url = JN.normalizeRecruiterUrl(input.value);
+  recruiterUrl = url || "";
+  const bad = url === null;
+  input.classList.toggle("invalid", bad);
+  status.className = `recruiter-status ${bad ? "bad" : url ? "ok" : ""}`;
+  status.textContent = bad
+    ? "That doesn't look like a LinkedIn link, so it won't be included."
+    : url ? "Added to your emails." : "";
 }
 
 // ── UI helpers ──
