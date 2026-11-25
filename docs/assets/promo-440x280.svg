@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <rect width="440" height="280" fill="#0f766e"/>
+  <g transform="translate(32 32) scale(0.5833)">
+    <rect width="96" height="96" rx="4" fill="#fff"/>
+    <path d="M40 22H72M62 22V56a16 16 0 0 1-32 0" fill="none" stroke="#0f766e" stroke-width="14"/>
+  </g>
+  <text x="32" y="156" font-family="Fraunces" font-weight="600" font-size="40" fill="#fff">Job Notifier</text>
+  <text x="32" y="196" font-family="IBM Plex Sans" font-size="18" fill="#fff">Share the jobs you apply to</text>
+  <text x="32" y="220" font-family="IBM Plex Sans" font-size="18" fill="#fff">with friends who'd fit them.</text>
+</svg>

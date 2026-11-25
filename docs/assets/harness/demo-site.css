@@ -1,0 +1,14 @@
+/* The fictional Kestrel Grid careers site the shots sit on. Not part of the extension. */
+body { margin: 0; font: 16px/1.6 Arial, Helvetica, sans-serif; color: #222; background: #fff; }
+.site { display: flex; align-items: center; gap: 40px; padding: 18px 48px; background: #1f3347; color: #fff; }
+.brand { font: 700 20px/1 Georgia, serif; }
+.site nav { display: flex; gap: 24px; font-size: 14px; color: #d5dde5; }
+main { max-width: 720px; padding: 40px 48px 64px; }
+.crumb, .meta { margin: 0; color: #5a6672; font-size: 14px; }
+h1 { margin: 8px 0; font: 700 34px/1.2 Georgia, serif; }
+h2 { margin: 32px 0 8px; font-size: 19px; }
+ul, ol { padding-left: 22px; }
+.apply { display: inline-block; margin-top: 20px; padding: 10px 22px; border-radius: 3px; background: #1f3347; color: #fff; font-weight: 700; text-decoration: none; }
+/* How Chrome shows the popup (below the toolbar, top right) and how content.js frames the overlay. */
+iframe.popup { position: fixed; top: 0; right: 12px; width: 380px; height: 100px; border: 1px solid #c4c4c0; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18); }
+iframe.overlay { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; color-scheme: normal; }
