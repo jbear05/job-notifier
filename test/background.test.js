@@ -16,6 +16,9 @@ const POSTING = 'Responsibilities and qualifications. Salary and benefits. Full-
 const nextTask = () => new Promise(resolve => setImmediate(resolve));
 const settle = async () => { for (let i = 0; i < 50; i++) await nextTask(); };
 const copy = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
+// Objects built by the code under test carry the vm realm's prototypes, which deepStrictEqual rejects
+// against this realm's literals. structuredClone rebuilds them here and, unlike JSON, keeps undefined values.
+const mainRealm = value => structuredClone(value);
 
 function storageArea(initial = {}) {
   const data = copy(initial);
@@ -111,6 +114,35 @@ const overlay = (tabId, url) => ({ id: RID, url: `chrome-extension://${RID}/over
 const jobSeen = (n = '') => ({ type: 'JOB_SEEN', text: `${POSTING} ${n}`, title: `Job ${n}` });
 const TABS = [1, 2, 3, 4, 5];
 
+// The same document after history.pushState or a hash change: Chrome keeps sender.documentId.
+const movedContent = (sender, url) => ({ ...sender, url, tab: { ...sender.tab, url } });
+const movedOverlay = (sender, url) => ({ ...sender, tab: { ...sender.tab, url } });
+
+// The worker checks a stored prompt's page with a no-data ping to its documentId (security contract,
+// criterion 31). Here, as in Chrome, the ping rejects once that document is gone.
+const PING = { type: 'DOCUMENT_PING' };
+const isPing = msg => msg?.type === PING.type;
+function liveDocuments(chrome) {
+  const live = new Map(); // tabId -> the documentId currently loaded in its top frame
+  const toTabs = [];
+  chrome.tabs.sendMessage = async (tabId, msg, options) => {
+    toTabs.push([tabId, msg, options]);
+    if (!isPing(msg)) return undefined;
+    if (options?.documentId && live.get(tabId) === options.documentId) return { ok: true };
+    throw new Error('Could not establish connection. Receiving end does not exist.');
+  };
+  return { live, pings: () => toTabs.filter(([, msg]) => isPing(msg)) };
+}
+
+// The overlay's analyze port, as chrome.runtime.connect from the frame.
+function analyzeTab(chrome, sender) {
+  return new Promise(resolve => {
+    const port = { name: 'analyze', sender, onMessage: event(), postMessage: resolve, disconnect() { resolve('disconnected'); } };
+    chrome.runtime.onConnect.fire(port);
+    port.onMessage.fire({ type: 'ANALYZE_TAB' });
+  });
+}
+
 test('review 1 finding 1: postings reported by five tabs at once are all kept', async () => {
   const { send } = loadWorker();
   await Promise.all(TABS.map(t => send(jobSeen(t), content(t, `https://jobs${t}.example/posting`))));
@@ -132,29 +164,129 @@ test('review 1 finding 1: prompts for five tabs confirmed at once are all kept',
   assert.deepEqual(states, TABS.map(() => 'prompt'), 'each tab\'s overlay still finds its prompt');
 });
 
-test('criterion 31 / review 1 finding 3: a full navigation clears the prompt; a same-document URL change keeps it', async () => {
-  const { chrome, send } = loadWorker();
-  const state = async (tabId, url) => (await send({ type: 'OVERLAY_STATE' }, overlay(tabId, url)))?.state;
-  const navigate = async (tabId, changeInfo, url) => {
-    chrome.tabs.onUpdated.fire(tabId, changeInfo, { id: tabId, url, status: changeInfo.status || 'complete' });
+// Criterion 31, corrected after the walkthrough pre-check (docs/walkthrough-auto/RESULTS.md, finding 1).
+// Chrome 157 and Edge 158 fire tabs.onUpdated { status: 'loading', url } then { status: 'complete' } for
+// history.pushState and hash changes exactly as for a real navigation, so status can't tell them apart.
+// The browser's sender.documentId can: it stays the same for those changes and is new after a reload or
+// navigation (probed in both browsers on 2026-11-26).
+
+test('criterion 31: pushState and hash changes (loading, then complete, same documentId) keep the prompt', async () => {
+  const { chrome, session, send } = loadWorker();
+  const docs = liveDocuments(chrome);
+  const tabId = 30;
+  await send(jobSeen(), content(tabId, 'https://jobs.example/posting/30'));
+  const done = content(tabId, 'https://ats.example/apply');
+  docs.live.set(tabId, done.documentId);
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, done))?.show, true);
+  const frame = overlay(tabId, done.url);
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, frame))?.state, 'prompt');
+
+  for (const [changes, url] of [
+    [[{ status: 'loading', url: 'https://ats.example/apply?step=done' }, { status: 'complete' }], 'https://ats.example/apply?step=done'],
+    [[{ status: 'loading', url: 'https://ats.example/apply?step=done#receipt' }, { status: 'complete' }], 'https://ats.example/apply?step=done#receipt'],
+    [[{ url: 'https://ats.example/apply?step=receipt' }], 'https://ats.example/apply?step=receipt'],
+  ]) {
+    for (const info of changes) chrome.tabs.onUpdated.fire(tabId, info, { id: tabId, url, status: info.status || 'complete' });
     await settle();
-  };
+    // content.js checks the page again after a URL change, from the same document.
+    await send({ type: 'CONFIRMATION_SEEN' }, movedContent(done, url));
+    assert.ok(session.data.prompts?.[tabId], `the worker still holds the prompt after ${JSON.stringify(changes)}`);
+    assert.equal((await send({ type: 'OVERLAY_STATE' }, movedOverlay(frame, url)))?.state, 'prompt', `the overlay still finds the prompt at ${url}`);
+  }
+});
 
-  await send(jobSeen(), content(10, 'https://jobs.example/posting/1'));
-  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(10, 'https://ats.example/done')))?.show, true);
-  assert.equal(await state(10, 'https://ats.example/done'), 'prompt');
+test('criterion 31: a pushState while a confirmation is still processing does not cancel the offer', async () => {
+  const { chrome, send } = loadWorker();
+  const docs = liveDocuments(chrome);
+  const tabId = 31;
+  await send(jobSeen(), content(tabId, 'https://jobs.example/posting/31'));
+  const done = content(tabId, 'https://ats.example/apply/31');
+  docs.live.set(tabId, done.documentId);
 
-  await navigate(10, { url: 'https://ats.example/done#receipt' }, 'https://ats.example/done#receipt');
-  assert.equal(await state(10, 'https://ats.example/done#receipt'), 'prompt', 'same-document URL change (no status) keeps it');
+  const local = chrome.storage.local;
+  const get = local.get.bind(local);
+  let releaseSettings;
+  const settingsGate = new Promise(resolve => { releaseSettings = resolve; });
+  local.get = async keys => { await settingsGate; return get(keys); };
+  const handling = send({ type: 'CONFIRMATION_SEEN' }, done);
+  const url = 'https://ats.example/apply/31?step=done';
+  chrome.tabs.onUpdated.fire(tabId, { status: 'loading', url }, { id: tabId, url, status: 'loading' });
+  chrome.tabs.onUpdated.fire(tabId, { status: 'complete' }, { id: tabId, url, status: 'complete' });
+  await settle();
+  releaseSettings();
+  local.get = get;
 
-  await navigate(10, { status: 'loading', url: 'https://ats.example/next' }, 'https://ats.example/next');
-  assert.equal(await state(10, 'https://ats.example/next'), 'none', 'full navigation within the same site clears it');
+  assert.equal((await handling)?.show, true, 'status "loading" for the same document must not invalidate the confirmation');
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, overlay(tabId, url)))?.state, 'prompt');
+});
 
-  // A reload is a full navigation too: status 'loading' with no url change.
-  await send(jobSeen('b'), content(11, 'https://jobs.example/posting/2'));
-  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(11, 'https://ats.example/done/2')))?.show, true);
-  await navigate(11, { status: 'loading' }, 'https://ats.example/done/2');
-  assert.equal(await state(11, 'https://ats.example/done/2'), 'none', 'reload clears it');
+test('criterion 31: a report from a different document in the tab clears its prompt', async () => {
+  const { chrome, session, send } = loadWorker();
+  chrome.tabs.sendMessage = async () => ({ ok: true }); // every page answers, so only the reported documentId can clear
+  for (const [tabId, report] of [
+    // Reloaded confirmation page: same URL, new document.
+    [32, done => ['CONFIRMATION_SEEN', { ...done, documentId: `reloaded-${done.documentId}` }]],
+    // Navigated, same site, to another page that looks like a posting.
+    [33, () => ['JOB_SEEN', content(33, 'https://ats.example/careers/next-role')]],
+  ]) {
+    await send(jobSeen(tabId), content(tabId, `https://jobs.example/posting/${tabId}`));
+    const done = content(tabId, `https://ats.example/done/${tabId}`);
+    assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, done))?.show, true);
+    const [type, sender] = report(done);
+    await send(type === 'JOB_SEEN' ? jobSeen(`next-${tabId}`) : { type }, sender);
+    assert.equal(session.data.prompts?.[tabId], undefined, `${type} from a new document drops tab ${tabId}'s prompt`);
+    assert.equal((await send({ type: 'OVERLAY_STATE' }, overlay(tabId, sender.url)))?.state, 'none');
+  }
+});
+
+test('criterion 31: a prompt whose document is gone is dropped before use (failed ping)', async () => {
+  const { chrome, session, send } = loadWorker();
+  const docs = liveDocuments(chrome);
+  const tabId = 34;
+  await send(jobSeen(), content(tabId, 'https://jobs.example/posting/34'));
+  const done = content(tabId, 'https://ats.example/done/34');
+  docs.live.set(tabId, done.documentId);
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, done))?.show, true);
+  const frame = overlay(tabId, done.url);
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, frame))?.state, 'prompt', 'a live document keeps its prompt');
+  assert.deepEqual(mainRealm(docs.pings().at(-1)), [tabId, PING, { documentId: done.documentId }],
+    'before using the prompt the worker pings the stored document, with no data');
+
+  // The page reloaded or navigated and its new document hasn't reported anything yet.
+  docs.live.set(tabId, 'some-newer-document');
+  const reply = await analyzeTab(chrome, frame);
+  assert.deepEqual(mainRealm(reply), { ok: false, code: 'NO_POSTING' }, 'Find friends on a stale prompt sends nothing');
+  assert.equal(session.data.prompts?.[tabId], undefined, 'the stale prompt is dropped');
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, frame))?.state, 'none');
+});
+
+test('criterion 31 (fail closed): a confirmation without a browser documentId is not offered', async () => {
+  const { session, send } = loadWorker();
+  const tabId = 35;
+  await send(jobSeen(), content(tabId, 'https://jobs.example/posting/35'));
+  const { documentId, ...noDocument } = content(tabId, 'https://ats.example/done/35');
+  assert.notEqual((await send({ type: 'CONFIRMATION_SEEN' }, noDocument))?.show, true, 'no prompt is offered');
+  assert.equal(session.data.prompts?.[tabId], undefined, 'and none is stored');
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, overlay(tabId, noDocument.url)))?.state, 'none');
+});
+
+test('criterion 31 / walkthrough 7.3: a reload still clears the prompt, and the posting is not offered again', async () => {
+  const { chrome, session, send } = loadWorker();
+  const docs = liveDocuments(chrome);
+  const tabId = 36;
+  await send(jobSeen(), content(tabId, 'https://jobs.example/posting/36'));
+  const done = content(tabId, 'https://ats.example/done/36');
+  docs.live.set(tabId, done.documentId);
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, done))?.show, true);
+
+  chrome.tabs.onUpdated.fire(tabId, { status: 'loading' }, { id: tabId, url: done.url, status: 'loading' });
+  const reloaded = { ...done, documentId: `reloaded-${done.documentId}` };
+  docs.live.set(tabId, reloaded.documentId);
+  chrome.tabs.onUpdated.fire(tabId, { status: 'complete' }, { id: tabId, url: done.url, status: 'complete' });
+  await settle();
+  assert.notEqual((await send({ type: 'CONFIRMATION_SEEN' }, reloaded))?.show, true, 'each posting is offered once');
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, overlay(tabId, done.url)))?.state, 'none');
+  assert.equal(session.data.prompts?.[tabId], undefined);
 });
 
 test('security low 2: a stored posting keeps the hostname, never the path or query', async () => {
@@ -173,8 +305,10 @@ test('security low 2: a stored posting keeps the hostname, never the path or que
 
 test('criterion 31: a confirmation still processing when its tab navigates cannot leave a prompt', async () => {
   const { chrome, send } = loadWorker();
+  const docs = liveDocuments(chrome);
   const tabId = 13;
   await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
+  docs.live.set(tabId, content(tabId, 'https://ats.example/done').documentId);
 
   const local = chrome.storage.local;
   const get = local.get.bind(local);
@@ -185,6 +319,8 @@ test('criterion 31: a confirmation still processing when its tab navigates canno
     return get(keys);
   };
   const handling = send({ type: 'CONFIRMATION_SEEN' }, content(tabId, 'https://ats.example/done'));
+  // A real navigation: the old document is gone and a new one is loading.
+  docs.live.set(tabId, content(tabId, 'https://ats.example/next').documentId);
   chrome.tabs.onUpdated.fire(tabId, { status: 'loading' }, { id: tabId, url: 'https://ats.example/next' });
   await settle();
   releaseSettings();
@@ -197,10 +333,14 @@ test('criterion 31: a confirmation still processing when its tab navigates canno
 
 test('criterion 31: a prompt lookup waits for a full-navigation cleanup already in progress', async () => {
   const { chrome, send } = loadWorker();
+  const docs = liveDocuments(chrome);
   const tabId = 14;
   await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
+  docs.live.set(tabId, content(tabId, 'https://ats.example/done').documentId);
   assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(tabId, 'https://ats.example/done')))?.show, true);
 
+  // A real navigation: the old document is gone and a new one is loading.
+  docs.live.set(tabId, content(tabId, 'https://ats.example/next').documentId);
   chrome.tabs.onUpdated.fire(tabId, { status: 'loading' }, { id: tabId, url: 'https://ats.example/next' });
   const reply = await send({ type: 'OVERLAY_STATE' }, overlay(tabId, 'https://ats.example/next'));
   assert.equal(reply?.state, 'none', 'lookups cannot return the previous document’s prompt during cleanup');
@@ -211,7 +351,7 @@ test('criterion 31: the worker does not acknowledge readiness when reading overl
   const tabId = 15;
   const done = 'https://ats.example/done';
   const messages = [];
-  chrome.tabs.sendMessage = async (_tabId, msg) => { messages.push(msg.type); };
+  chrome.tabs.sendMessage = async (_tabId, msg) => { if (!isPing(msg)) messages.push(msg.type); };
   await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
   assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(tabId, done)))?.show, true);
   chrome.storage.local.get = async () => { throw new Error('settings unavailable'); };
@@ -228,7 +368,7 @@ test('criterion 31: only the rendered overlay can acknowledge readiness', async 
   const hostSender = content(tabId, done);
   const frameSender = overlay(tabId, done);
   const messages = [];
-  chrome.tabs.sendMessage = async (id, msg) => { messages.push([id, msg.type]); };
+  chrome.tabs.sendMessage = async (id, msg) => { if (!isPing(msg)) messages.push([id, msg.type]); };
   await send(jobSeen(), content(tabId, 'https://ats.example/posting'));
   assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, hostSender))?.show, true);
   const reply = await send({ type: 'OVERLAY_STATE' }, frameSender);
@@ -242,6 +382,43 @@ test('criterion 31: only the rendered overlay can acknowledge readiness', async 
 
   await send({ type: 'OVERLAY_READY' }, frameSender);
   assert.deepEqual(messages, [[tabId, 'OVERLAY_READY']]);
+});
+
+// Walkthrough 7.2 (RESULTS.md finding 1): with the prompt gone, the worker ignored OVERLAY_CLOSE and the
+// full-page frame stayed stuck. Closing is always safe, so a valid overlay frame can always close itself.
+test('walkthrough 7.2: OVERLAY_CLOSE from the overlay frame always removes the frame, even with no stored prompt', async () => {
+  const { chrome, session, send } = loadWorker();
+  const toTabs = [];
+  chrome.tabs.sendMessage = async (...args) => { toTabs.push(args); };
+  const closes = () => toTabs.filter(([, msg]) => msg?.type === 'CLOSE_OVERLAY');
+  const CLOSE = [{ type: 'CLOSE_OVERLAY' }, { frameId: 0 }];
+
+  await send({ type: 'OVERLAY_CLOSE' }, overlay(40, 'https://ats.example/done/40'));
+  assert.deepEqual(mainRealm(closes()), [[40, ...CLOSE]], 'a tab that never had a prompt');
+
+  const tabId = 41;
+  await send(jobSeen(), content(tabId, 'https://jobs.example/posting/41'));
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(tabId, 'https://ats.example/done/41')))?.show, true);
+  const frame = overlay(tabId, 'https://ats.example/done/41');
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, frame))?.state, 'prompt');
+  delete session.data.prompts[tabId]; // dropped by the worker since the overlay loaded it
+  await send({ type: 'OVERLAY_CLOSE' }, frame);
+  assert.deepEqual(mainRealm(closes().at(-1)), [tabId, ...CLOSE], 'the overlay whose prompt was dropped (7.2)');
+
+  const tabId2 = 42;
+  await send(jobSeen('b'), content(tabId2, 'https://jobs.example/posting/42'));
+  assert.equal((await send({ type: 'CONFIRMATION_SEEN' }, content(tabId2, 'https://ats.example/done/42')))?.show, true);
+  const frame2 = overlay(tabId2, 'https://ats.example/done/42');
+  assert.equal((await send({ type: 'OVERLAY_STATE' }, frame2))?.state, 'prompt');
+  await send({ type: 'OVERLAY_CLOSE' }, frame2);
+  assert.deepEqual(mainRealm(closes().at(-1)), [tabId2, ...CLOSE], 'the owning overlay, prompt still stored');
+  assert.equal(session.data.prompts?.[tabId2], undefined, 'closing clears the owner\'s prompt');
+
+  const before = closes().length;
+  await send({ type: 'OVERLAY_CLOSE' }, content(43, 'https://ats.example/done/43'));
+  await send({ type: 'OVERLAY_CLOSE' }, { id: RID, url: `chrome-extension://${RID}/popup.html`, frameId: 0 });
+  await send({ type: 'OVERLAY_CLOSE' }, { ...overlay(44, 'https://ats.example/done/44'), url: `chrome-extension://${RID}/options.html` });
+  assert.equal(closes().length, before, 'the sender gate stays: no content script, popup, or other extension page can close a tab\'s frame');
 });
 
 test('review 2 privacy: the stored posting site is the hostname without a non-default port', async () => {

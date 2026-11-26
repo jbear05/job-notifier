@@ -75,7 +75,7 @@ The switch shows on only when `autoDetect` is `true` and the permission is held.
 | `chrome.storage.local` | `autoDetect` | boolean, default `false` |
 | `chrome.storage.session` | `vaultKey` | Base64 256-bit derived key kept in memory only while unlocked for the Chrome session. Cleared on **Lock now**, vault reset, or browser close |
 | `chrome.storage.session` | `jobs` | recently viewed postings by tab id: `{ [tabId]: { text, title, url, seenAt, hash } }`, text capped at 8,000 characters. `url` holds only the site's hostname, never the path, query, or fragment. Removed when the tab closes |
-| `chrome.storage.session` | `prompts` | the posting and confirmation origin for each tab, with browser-supplied identifiers for the top-level document and the overlay frame and document that loaded the prompt. Cleared on close, when the tab loads a new page (same-document URL changes keep it), when the tab closes, and when auto-detect is turned off |
+| `chrome.storage.session` | `prompts` | the posting and confirmation origin for each tab, with browser-supplied identifiers for the top-level document and the overlay frame and document that loaded the prompt. Cleared on close, when you leave or reload the page (in-page URL changes such as `pushState` or hash changes keep it), when the tab closes, and when auto-detect is turned off |
 | `chrome.storage.session` | `prompted` | hashes of the last 100 postings already offered, so each posting is offered once |
 
 Rules:
@@ -141,8 +141,11 @@ Opening the popup never calls Claude, and nothing is focused by default, so a st
    └─ Skips if there is none, or it was already offered (prompted)
    └─ Otherwise stores prompts[tabId] (the posting, confirmation origin, and
       top-level document ID), adds the hash to prompted, and replies { show: true }
-   └─ The worker serializes prompt reads and writes with navigation cleanup.
-      A full navigation invalidates reports still being processed for the old page.
+   └─ No browser document ID, no prompt. A report from another document in
+      the tab (you left or reloaded the page) clears the prompt; in-page URL
+      changes keep the document and the prompt. Before using a stored prompt,
+      the worker sends DOCUMENT_PING to its document and drops the prompt if
+      that document is gone.
 
 4. content.js adds a full-viewport transparent iframe with overlay.html
    └─ The frame sends OVERLAY_STATE and gets the prompt for its own tab
@@ -157,8 +160,9 @@ Opening the popup never calls Claude, and nothing is focused by default, so a st
       focuses it on readiness or removes it after a five-second timeout.
    └─ Only a click on Find friends opens the analyze port with ANALYZE_TAB.
       It carries no job text; the worker uses the posting it recorded.
-   └─ Close, Not now, Escape, or a scrim click sends OVERLAY_CLOSE. The worker
-      clears prompts[tabId] and sends CLOSE_OVERLAY to the content script,
+   └─ Close, Not now, Escape, or a scrim click before Find friends sends
+      OVERLAY_CLOSE. The worker clears prompts[tabId] and sends CLOSE_OVERLAY
+      to the content script (even if the prompt is already gone),
       which removes the frame and returns focus to the page.
 ```
 
@@ -173,6 +177,7 @@ Because the posting is stored by tab id in the extension (not in the site's stor
 | `OVERLAY_DISMISSED` | content script → worker | data-free request to clear the prompt after a timeout or Escape in the host page |
 | `CLOSE_OVERLAY` | worker → content script (top frame) | data-free signal to remove the frame and restore focus |
 | `STOP` | worker → content script (top frame) | data-free signal to stop page reading and close the overlay |
+| `DOCUMENT_PING` | worker → content script (the prompt's document) | nothing; the reply is `{ ok: true }`, and a failed send means the document is gone |
 | `OVERLAY_STATE` | overlay → worker | nothing; the reply is this tab's prompt (`posting`, `vaultState`, and `hasKey`/`friendsStatus` only when unlocked) or `{ state: 'none' }` |
 | `OVERLAY_READY` | overlay → worker → matching content document | data-free signal that the rendered frame can accept clicks and take focus |
 | `OVERLAY_CLOSE` | overlay → worker | nothing |

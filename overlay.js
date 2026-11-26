@@ -9,6 +9,7 @@ let state = 'none';
 let posting = null;
 let recheck = false; // the shown state sent the user to settings; ask the worker again when they come back
 let overlayEpoch = 0;
+let requested = false; // Find friends was clicked; the scrim no longer closes (Design: Scrim clicks)
 
 function show(name, title, nodes, { error = false, describe = false } = {}) {
   state = name;
@@ -39,6 +40,7 @@ async function load() {
   posting = reply.posting;
   $('scrim').hidden = false;
   $('dialog').hidden = false;
+  requested = false;
   showPrompt(reply.vaultState || 'unlocked', !!reply.hasKey);
   // The host frame remains noninteractive until this prompt is in the DOM.
   await chrome.runtime.sendMessage({ type: 'OVERLAY_READY' }).catch(() => {});
@@ -103,6 +105,7 @@ function showNoFriends(status) {
 async function analyze() {
   const myEpoch = overlayEpoch;
   recheck = false;
+  requested = true;
   show('loading', COPY.loading[0], [loadingView()]);
   const reply = await analyzeRequest({ type: 'ANALYZE_TAB' }, 90000);
   if (myEpoch !== overlayEpoch) return;
@@ -149,9 +152,12 @@ document.addEventListener('keydown', e => {
   }
 });
 $('close-btn').addEventListener('click', close);
-// A stray click can't throw away edited drafts: the scrim doesn't close results.
+// The scrim closes only the prompt before Find friends: after that a stray click
+// (such as a double-click's second) can't throw away a request, Try again, or drafts.
+// A click that does nothing leaves focus where it was.
+$('scrim').addEventListener('mousedown', e => e.preventDefault());
 $('scrim').addEventListener('click', () => {
-  if (state !== 'results') close();
+  if (state === 'prompt' && !requested) close();
 });
 document.addEventListener('visibilitychange', () => {
   if (recheck && document.visibilityState === 'visible') {

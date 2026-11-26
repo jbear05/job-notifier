@@ -472,7 +472,7 @@ function originOf(url) {
 // Serialize session map changes and prompt lookups so tabs don't overwrite
 // each other's entries or retrieve a prompt while its deletion is queued.
 let sessionOperations = Promise.resolve();
-// Tokens distinguish an in-flight content message from one sent after a full navigation.
+// Tokens invalidate in-flight content messages when the tab closes or auto-detect turns off.
 const contentDocuments = new Map();
 
 function currentDocument(tabId) {
@@ -502,7 +502,8 @@ function rememberJob(sender, msg, isCurrent) {
 function offerPrompt(sender, isCurrent) {
   return inSession(async () => {
     const { jobs = {}, prompts = {}, prompted = [] } = await chrome.storage.session.get(['jobs', 'prompts', 'prompted']);
-    if (!isCurrent()) return false;
+    // Without the browser's document ID the prompt can't be tied to this page (fail closed).
+    if (!isCurrent() || !sender.documentId) return false;
     const posting = JN.recallPosting(jobs, sender.tab);
     if (!posting || prompted.includes(posting.hash)) return false;
     prompts[sender.tab.id] = { ...posting, origin: originOf(sender.url), contentDocumentId: sender.documentId };
@@ -517,23 +518,37 @@ function readPrompt(prompts, tab) {
   return prompt && prompt.origin === originOf(tab.url) ? prompt : null;
 }
 
-function dropPrompt(tabId, contentDocumentId) {
+// A stored prompt is used only while the page that reported it is still loaded
+// (criterion 31): a no-data ping to its document fails after a reload, navigation,
+// or back/forward. Same-document URL changes (pushState, hash) keep the document.
+// Must run inside the session queue; a stale prompt is deleted.
+async function livePrompt(prompts, tab) {
+  const prompt = readPrompt(prompts, tab);
+  if (prompt?.contentDocumentId) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'DOCUMENT_PING' }, { documentId: prompt.contentDocumentId });
+      return prompt;
+    } catch (e) {
+      // The document is gone.
+    }
+  }
+  if (prompts[tab.id]) {
+    delete prompts[tab.id];
+    await chrome.storage.session.set({ prompts });
+  }
+  return null;
+}
+
+// Drops the tab's prompt, or with `keepDocumentId`, only a prompt from another document.
+function dropPrompt(tabId, keepDocumentId) {
   return inSession(async () => {
     const { prompts = {} } = await chrome.storage.session.get('prompts');
     const prompt = prompts[tabId];
-    if (!prompt || (contentDocumentId && contentDocumentId !== prompt.contentDocumentId)) return;
+    if (!prompt || (keepDocumentId && keepDocumentId === prompt.contentDocumentId)) return;
     delete prompts[tabId];
     await chrome.storage.session.set({ prompts });
   });
 }
-
-// A full navigation or reload clears the tab's prompt (criterion 31). Same-document
-// URL changes (single-page apps) arrive without status 'loading' and keep it.
-chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.status !== 'loading') return;
-  contentDocuments.delete(tabId);
-  dropPrompt(tabId);
-});
 
 chrome.tabs.onRemoved.addListener(tabId => {
   contentDocuments.delete(tabId);
@@ -635,10 +650,12 @@ async function onContentMessage(msg, sender) {
   // The host page closed the frame (Escape, or the overlay never confirmed).
   // Closing is always safe, so this needs no auto-detect check.
   if (msg.type === 'OVERLAY_DISMISSED') {
-    await dropPrompt(sender.tab.id, sender.documentId);
+    await dropPrompt(sender.tab.id);
     return { ok: true };
   }
   const isCurrent = currentDocument(sender.tab.id);
+  // A report from a new document (reload or navigation) means the prompt's page is gone (criterion 31).
+  await dropPrompt(sender.tab.id, sender.documentId);
   if (!(await getNonSensitiveSettings()).autoDetect) return { off: true };
   if (msg.type === 'JOB_SEEN') {
     await rememberJob(sender, msg, isCurrent);
@@ -663,7 +680,17 @@ function onOverlayMessage(msg, sender) {
   const isCurrent = currentDocument(tab.id);
   return inSession(async () => {
     const { prompts = {} } = await chrome.storage.session.get('prompts');
-    const prompt = isCurrent() ? readPrompt(prompts, tab) : null;
+    // Closing is always safe: any overlay frame in the tab can remove it, even after
+    // its prompt was dropped (walkthrough 7.2). Only the owner's close clears the prompt.
+    if (msg.type === 'OVERLAY_CLOSE') {
+      if (ownsPrompt(prompts[tab.id], sender)) {
+        delete prompts[tab.id];
+        await chrome.storage.session.set({ prompts });
+      }
+      await chrome.tabs.sendMessage(tab.id, { type: 'CLOSE_OVERLAY' }, { frameId: 0 }).catch(() => {});
+      return { ok: true };
+    }
+    const prompt = isCurrent() ? await livePrompt(prompts, tab) : null;
     if (msg.type === 'OVERLAY_STATE') {
       if (!prompt || (prompt.overlayFrameId && !ownsPrompt(prompt, sender))) return { state: 'none' };
       const settings = await getNonSensitiveSettings();
@@ -682,14 +709,7 @@ function onOverlayMessage(msg, sender) {
       return reply;
     }
     if (!ownsPrompt(prompt, sender)) return { ok: false };
-    const target = prompt.contentDocumentId ? { documentId: prompt.contentDocumentId } : { frameId: 0 };
-    if (msg.type === 'OVERLAY_READY') {
-      await chrome.tabs.sendMessage(tab.id, { type: 'OVERLAY_READY' }, target).catch(() => {});
-    } else {
-      delete prompts[tab.id];
-      await chrome.storage.session.set({ prompts });
-      await chrome.tabs.sendMessage(tab.id, { type: 'CLOSE_OVERLAY' }, target).catch(() => {});
-    }
+    await chrome.tabs.sendMessage(tab.id, { type: 'OVERLAY_READY' }, { documentId: prompt.contentDocumentId }).catch(() => {});
     return { ok: true };
   });
 }
@@ -736,7 +756,7 @@ chrome.runtime.onConnect.addListener(port => {
       const isCurrent = currentDocument(sender.tab.id);
       const prompt = await inSession(async () => {
         const { prompts = {} } = await chrome.storage.session.get('prompts');
-        const current = readPrompt(prompts, sender.tab);
+        const current = isCurrent() ? await livePrompt(prompts, sender.tab) : null;
         if (!isCurrent() || !ownsPrompt(current, sender)) return null;
         const { autoDetect } = await getNonSensitiveSettings();
         return autoDetect && isCurrent() ? current : null;

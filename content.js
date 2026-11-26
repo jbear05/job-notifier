@@ -64,7 +64,9 @@ function showFrame() {
   returnFocus = document.activeElement;
   frame = document.createElement('iframe');
   frame.title = 'Job Notifier';
-  frame.allow = 'clipboard-write';
+  // The frame's document has the static extension origin, not the dynamic src host,
+  // so the grant names it (walkthrough 10.3). Never clipboard-read.
+  frame.allow = `clipboard-write chrome-extension://${chrome.runtime.id}`;
   frame.tabIndex = -1;
   const style = {
     position: 'fixed', inset: '0', width: '100%', height: '100%', 'max-width': 'none', 'max-height': 'none',
@@ -113,9 +115,13 @@ function stop() {
 
 // Only the extension can send these: the service worker confirms the overlay is
 // showing, closes the frame when the overlay asks, and stops this script when
-// auto-detect is turned off.
-chrome.runtime.onMessage.addListener((msg, sender) => {
+// auto-detect is turned off. It also pings this document before using its prompt.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender?.id !== chrome.runtime.id || sender.tab) return;
+  if (msg?.type === 'DOCUMENT_PING') {
+    sendResponse({ ok: true });
+    return;
+  }
   if (msg?.type === 'OVERLAY_READY' && frame && readyTimer !== null) {
     clearTimeout(readyTimer);
     readyTimer = null;

@@ -22,7 +22,7 @@ All of this is stored on your computer, in Chrome's extension storage for your p
 | Model, effort, match threshold, and whether auto-detect is on | `chrome.storage.local` (`settings`, `autoDetect`) | Until you change them or remove the extension |
 | Session unlock key (`vaultKey`) | `chrome.storage.session` | In memory only while unlocked, until you click **Lock now**, erase saved data, or close Chrome |
 | Job postings you viewed: the posting text (up to 8,000 characters), page title, the site's hostname (such as `jobs.example.com`, never the full address), and time viewed | `chrome.storage.session` | In memory only, until you close that tab or close Chrome. A posting is offered after a confirmation only within 30 minutes of viewing it |
-| A pending "Find friends for this job?" prompt (the posting and the site that showed the confirmation), and fingerprints of postings already offered | `chrome.storage.session` | In memory only. The prompt is cleared when you close it, load another page in that tab, or close the tab; everything here is cleared when you close Chrome |
+| A pending "Find friends for this job?" prompt (the posting and the site that showed the confirmation), and fingerprints of postings already offered | `chrome.storage.session` | In memory only. The prompt is cleared when you close it, leave or reload the page, or close the tab (address changes within the same page keep it); everything here is cleared when you close Chrome |
 
 Analysis results (the job summary, scores, and drafts) are not stored. They exist only while the popup or results panel is open.
 
