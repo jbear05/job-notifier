@@ -854,3 +854,72 @@ All three .woff2 files start with the `wOF2` signature. Both license texts are S
 - Security **PASS** for the runtime fixes. Focused suite 61/61. Dynamic sender metadata, permission changes, frame loading, and clipboard/focus checks still need Chrome evidence.
 - Designer **PASS** on the 22 re-rendered screenshots in `dist/review-round3/`. Twenty-one match the prior approved PNGs byte for byte. The loading spinner was at a different animation frame. The whole-window popup capture remains assigned to the user.
 - The user answered the storage question and chose passphrase encryption. See Decision 21. This adds a spec and a new implementation and review cycle before release. The verified round 2 fixes are checkpointed separately.
+
+**PM pre-sign-off audit (2026-11-26):**
+- **Basis:** HEAD `b33a65c` (after `fa35c09`). Team lead evidence: `npm test` 112/112; `npm run check --script-shell=bash` passes; release zip rebuilt at HEAD with 27 entries (runtime files plus LICENSE), no key-shaped strings, and the IBM Plex license matching its logged SHA-256 (zip SHA-256 `a972905259c46777057c7d70591759f1fa6126302fc71b7232c0b774d8837f44`); PR #5 CI 2/2 green and mergeable; PR #4 CI green. Review verdicts come from this log and the passphrase-storage log.
+- qa's headless Edge pre-check (`docs/walkthrough-auto/RESULTS.md`) hadn't landed when this audit was written, so it isn't counted. Step numbers refer to `docs/release-walkthrough.md`.
+- **Rule:** "Met" means every piece of evidence the criterion asks for exists now, including its manual check above. "Pending" means some of that evidence needs real Chrome. For pending rows, the automated part that already passes is listed first.
+- **Result:**
+  - Criteria 1–38: 16 met, 22 pending manual evidence, 0 not met.
+  - P-01–P-10: 4 met, 6 pending, 0 not met.
+  - Total: **20 met, 28 pending, 0 not met.**
+
+| # | Status | Evidence, or the walkthrough step that proves it |
+|---|---|---|
+| 1 | Met | Task 1 history check (above) and the resumed check at `7214fd5`; user decision to keep the owner's email in history; "criterion 1: no API key anywhere in the working tree". |
+| 2 | Pending | Passing: "criterion 2: a fresh install has no friends until the user adds one", "criterion 2: the example friend is never loaded as data". Fresh-profile screenshots still needed: 3.4 [Blocker]. |
+| 3 | Met | "criterion 3/4: site access is optional all-sites access plus activeTab, nothing unused" and "criterion 3/21: README and the store listing justify every permission and host pattern". Docs were read in release rounds 1–3: the designer's R1 retention finding was fixed, then R2 and R3 PASS. |
+| 4 | Pending | Passing: "criterion 3/4" (manifest shape). Still needed: the Details/Site access screenshot and Chrome's permission prompt, 1.2, 5.1, 5.2. |
+| 5 | Pending | Passing: "criterion 5: the popup reads the page with scripting.executeScript, so tabs open before install work". Still needed: the tab opened before install, 3.11 [Blocker]. |
+| 6 | Pending | Passing: "criterion 6: the prompt names the posting by site and page title", "criterion 32a/6". Still needed: a network log showing nothing is sent before the click, 6.1, 6.2, 11.4. |
+| 7 | Met | "criterion 7: auto-detect is off by default", "criterion 7: the settings page states auto-detect is off unless turned on". Steps 1.3–1.4 confirm. |
+| 8 | Pending | Passing: "criterion 30" static check (the frame takes no page data). Still needed: page-console checks and the aggressive-CSS page, 6.3, 6.4. |
+| 9 | Met | "criterion 9: {case} maps to a plain-language message" (10 cases) and "criterion 9: an unrecognized status shows the API message". Step 8.4 confirms the no-network case live. |
+| 10 | Pending | No automated test. Still needed: clipboard failure in the popup and in the overlay frame, 10.1–10.3. |
+| 11 | Met | Designer PASS on the popup setup captures (release R2 and R3; `popup-uninitialized.png` in encryption R2). Steps 1.3 and 2.3 add real-Chrome shots. |
+| 12 | Pending | Passing: "criterion 12: pages declare lang="en", keep focus outlines, and the overlay is a modal dialog". Live focus was left open by the designer in both phases: 9.1–9.4. |
+| 13 | Pending | Passing: "validateFriends catches common mistakes", the criterion 35 tests, and "P-07: unlocked friend CRUD…". Still needed: add, edit, exclude, and remove in the UI, plus an import/export round trip, 3.5–3.9. |
+| 14 | Met | "criterion 14: the default model is a cheaper model from a verified allowlist", "criterion 14: the model is picked from a select, not free text". Engineer A confirmed the IDs on 2026-11-25 and the team lead rechecked them; links are above. Step 3.2 confirms. |
+| 15 | Met | "criterion 15: the settings page explains cost and data use above the key field". `screenshot-3-settings.png` passed ui-designer encryption R2. Step 3.1 confirms. |
+| 16 | Met | "criterion 16: PRIVACY.md covers reading, storage, sending, deletion, and contact, and is linked" and the "P-09" docs test. Docs were reviewed (designer release R1 fix, security encryption R1 PASS). |
+| 17 | Met | "criterion 17: an MIT LICENSE matches package.json". |
+| 18 | Met | "criterion 18: manifest.json and package.json are both version 2.0.0", which runs in CI through `npm test` (qa note 7). PR #5 CI is green. |
+| 19 | Pending | Passing: "criterion 19: the release zip holds only runtime files", and the zip at HEAD has 27 entries (runtime files plus LICENSE). Still needed: an unpacked load with no errors, 1.1 [Blocker]. |
+| 20 | Met | "criterion 20: README covers the store install, privacy, troubleshooting; DOCS matches the code" and the "P-09" docs test. Docs were reviewed in both phases. |
+| 21 | Pending | Passing: the three "criterion 21" tests (listing fields, asset sizes, icon sizes), and engineer B and the team lead checked the store rules. `screenshot-2-popup.png` is still the headless composite; the whole-window capture is 13.1–13.3. The dashboard's data-use wording is checked at submission (store-listing "Before you submit"). |
+| 22 | Pending | Passing: the four "criterion 22" tests, and the designer passed every surface in both phases. Still needed: a network log showing no font CDN, and the rendered fonts, 11.1, 11.3, 11.5. |
+| 23 | Pending | Passing: `npm test` 112/112, the check script, PR #5 CI 2/2 green including the manifest check, and both "criterion 23" tests. Still needed: the existing behaviors in Chrome, 5.2, 6.2, 6.5, 10.1, 10.4–10.6. |
+| 24 | Met | "criterion 24: page text and friend fields are data; instructions live in the system field", "criterion 24 / security low 1: stripping delimiters from crafted page text is fast and complete". |
+| 25 | Met | "criterion 25: parseResponse coerces wrong types from Claude without throwing", "criterion 25: parseResponse caps every field from Claude". |
+| 26 | Pending | Passing: "criterion 26: drafts with a link or email address are flagged for review", "criterion 26: the system prompt keeps links and contact details out of drafts". Still needed: email opens only on a click, and the note updates live, 10.5 [Blocker], 10.6, 10.7. |
+| 27 | Met | "criterion 27: mailto takes the recipient from the friend only and cannot gain headers". |
+| 28 | Pending | Passing: "criterion 28: no raw-HTML sinks or script URLs in runtime code". Still needed: HTML payloads shown as literal text on every surface, 8.3 [Blocker]. |
+| 29 | Pending | Passing: "criterion 29: the manifest CSP stays script-src self, object-src self", "criterion 29: runtime files load nothing remote…". Still needed: network logs, 11.1–11.4. |
+| 30 | Pending | Passing: "criterion 30: the overlay frame takes no data from the page, URL, or postMessage; content.js renders no HTML". Still needed: the `window.find` and DOM checks, 6.3. |
+| 31 | Pending | Passing: "criterion 31: only the overlay page is web-accessible, with a dynamic URL", plus 6 navigation and readiness tests in `test/background.test.js` and `test/content.test.js`. Still needed: framing and navigation in Chrome, 7.1–7.3, 8.1, 8.2, 11.3. |
+| 32 | Pending | Passing: "criterion 32a/6", "criterion 32b", "criterion 32c". Security's R3 PASS depends on checking the sender metadata in real Chrome: 8.1 [Blocker], which records whether `sender.url` carries the dynamic ID. |
+| 33 | Pending | Passing: both "criterion 33" tests (text cap, allowlist, fixed `max_tokens`). No automated test covers repeat clicks: 8.4 [Blocker]. |
+| 34 | Met | As amended by Decision 21 (P-01, P-02, P-09): "criterion 34: no storage.sync, no setAccessLevel, no console output, and content scripts never touch storage", "criterion 34: mapped error messages never contain the API key", "criterion 34 / P-09: settings page masks the key and states passphrase encryption and lock lifetime". Step 3.10 confirms storage live. |
+| 35 | Pending | Passing: six "criterion 35" tests, and "P-07" shows a rejected import leaves the ciphertext unchanged. The manual check asks for the UI: 3.7 [Blocker], 3.9 [Blocker]. |
+| 36 | Pending | Passing: "criterion 36: turning auto-detect off unregisters the script and returns the all-sites permission", "criterion 36: STOP removes the overlay and restores the previous page focus". Still needed: registration, permission, and revocation in Chrome, 1.4, 5.1–5.5, 7.4. |
+| 37 | Pending | Passing: "criterion 37: only a posting from the same tab or its opener tab is offered". Still needed: a real `openerTabId`, 6.5 [Blocker]. |
+| 38 | Met | "criterion 38: the release zip has no secrets", "criterion 38: every file in fonts/ matches its logged source URL and SHA-256". The user decided the wording (review round 1). CI's line-ending failure was fixed in `fa35c09`. The zip at HEAD has no key-shaped strings, and the IBM Plex license matches its logged SHA-256. |
+| P-01 | Pending | Passing: "P-01 / P-02: fresh install starts uninitialized; VAULT_SETUP and saves store only ciphertext in local and vaultKey in session with zero fetch calls" (synthetic storage). Still needed: real storage and network, 2.2, 3.3, 3.10 [Blocker], 11.4. |
+| P-02 | Met | Four "P-02" tests (passphrase rules, AAD, envelope validation, and round trip / wrong passphrase / tampering / unique IV and salt), plus the "P-01 / P-02" test. Security passed the format and parameters in encryption R1 and R2. Steps 3.10 and 4.2 confirm. |
+| P-03 | Met | "P-03: isSettingsSender and isStaticExtensionSender restrict to exact top-frame extension page", "P-03: sender isolation rejects VAULT_* from popup/overlay/content and omits sensitive fields when not unlocked". Security PASS in R1 and R2. Steps 8.5 [Blocker] and 6.6 confirm in Chrome. |
+| P-04 | Pending | Passing: "P-04: service worker restart stays unlocked, browser restart starts locked…", "P-04 / P-06: VAULT_LOCK cancels…", "P-04: concurrent settings edits…", "P-04 regression…". Still needed: real restarts and two tabs, 4.1–4.8 (the 4.8 browser restart is a [Blocker]). |
+| P-05 | Pending | Passing: ui-designer PASS on the settings-state screenshots (encryption R2). The criterion asks for the keyboard flow in real Chrome: 2.1, 4.2, 9.2, 12.1, 12.2. |
+| P-06 | Pending | Passing: "P-06: analyze refuses when uninitialized, needs-conversion, locked, or unreadable with zero fetch calls…", "P-04 / P-06…". The criterion asks to validate both the toolbar and confirmation flows: 1.3, 4.1, 4.5, 4.6, 6.6–6.8, 8.5. |
+| P-07 | Pending | Passing: "P-07: unlocked friend CRUD validates via cleanFriends, leaves ciphertext unchanged on rejection…". Still needed: the UI flows and the exported file, 3.5–3.9, 3.12. |
+| P-08 | Met | "P-08: detectLegacyPreEncryption200…", "P-08: P3 pre-encryption 2.0.0 conversion preserves data on failure…", "P-08 regression…". These are the synthetic upgrade fixture the criterion asks for. Steps 12.2–12.5 confirm. |
+| P-09 | Met | "P-09: manifest permissions unchanged and docs/settings disclosures reflect passphrase encryption, lock lifetime, and readable export", "criterion 34 / P-09…". Security encryption R1 verified the disclosures. |
+| P-10 | Pending | Passing: 112/112, covering permissions, data flow, zip allowlist, secret scan, and manifest references, plus ui-designer R2, security R1–R2, and code-reviewer R3 PASS. Still needed: a clean-profile load and the whole-window screenshot, 1.1, 13. |
+
+- **Not met:** none.
+- **What final sign-off needs:**
+  - The user's report as described under "Report back" in `docs/release-walkthrough.md`, including the evidence screenshots and the console output from 3.10, 8.1, 8.2, 8.5, and 12.5.
+  - The new `screenshot-2-popup.png`, with `npm test` passing.
+  - A decision from the user on whether any of qa's headless Edge results can replace a Chrome step. Until then, PM treats them as an early signal only.
+- **Stale hashes:** `PROGRESS.md` (before this update) and `HANDOFF.md` still list the `e7cd5da` zip hash (`5F68…`). If HEAD hasn't moved, compare the walkthrough's Setup hash against `a972…`.
+- **Correction to my earlier milestone closeout:** the passphrase-storage log says I drafted the release retro. That draft was never saved. The interim retro is now in the shared team-notes `retros.md`.
+- **Next owner:** the user (Chrome walkthrough), then PM (final sign-off).

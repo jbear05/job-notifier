@@ -21,7 +21,12 @@ Make the Job Notifier Chrome extension (Manifest V3) ready for a public Chrome W
   - **P2:** Keep readable JSON friends export (`job-notifier-friends.json`, excludes API key/passphrase/settings), labeled as unencrypted and readable outside Chrome.
   - **P3:** Explicit conversion of existing pre-encryption 2.0.0 data (verify encrypted copy can be read and authenticated before clearing legacy `settings.apiKey` and `friends`; no automatic 1.x migration).
 
-## Verification (Windows, at `e7cd5da`)
+## Verification (Windows; latest at `b33a65c`, 2026-11-26)
+- Latest: `npm test` 112/112; check passes; PR #5 CI 2/2 green and mergeable; release zip rebuilt at HEAD after the font-license fix (`fa35c09`): 27 entries, no key-shaped strings, SHA-256 `a972905259c46777057c7d70591759f1fa6126302fc71b7232c0b774d8837f44` (supersedes the `5F68…` hash below).
+- PM pre-sign-off audit (handoff log of `docs/specs/public-release.md`): 20/48 criteria met, 28 pending manual Chrome evidence, 0 not met. Interim retro in `C:\Users\jairg\Documents\team-notes\retros.md`.
+- qa automated pre-check in headless Edge 158 (Chrome 157 no longer accepts `--load-extension`; Edge does): `docs/walkthrough-auto/precheck.js`, results in `docs/walkthrough-auto/RESULTS.md`, mocked Anthropic API. Was in progress at this update.
+
+Earlier, at `e7cd5da`:
 - `npm test`: **112 passed, 0 failed** (`test/vault.test.js` 17/17 + `test/core.test.js` + `test/background.test.js` + `test/content.test.js` + `test/release.test.js`).
 - `node --check` 7/7 / `npm run check --script-shell=bash`: passed (with `C:\Program Files\Git\bin` at the front of `PATH` outside the sandbox; sandbox blocks Git Bash startup `0xC0000022`).
 - `git diff --check`: passed. (`git commit` ran outside the sandbox because `.git/index.lock` fails with `Permission denied` inside the sandbox.)

@@ -5,17 +5,24 @@ Specs: [docs/specs/public-release.md](docs/specs/public-release.md) and [docs/sp
 ## Done
 - Pre-encryption public release implementation, documentation, packaging, and store assets passed Round 3 reviews (`reviewer`, `designer`, `security`) at checkpoint `5a993bf` with 95/95 tests passing.
 - Passphrase encryption (Decision 21 / P1–P3) implemented at `e7cd5da` across `lib/core.js`, `background.js`, `options.*`, `popup.*`, `overlay.js`, `ui.css`, docs, and store listing.
-- Final Round 3 reviews passed (`security` PASS in Rounds 1–2, `ui-designer` PASS in Round 2, `code-reviewer` PASS in Round 3).
-- Automated verification at `e7cd5da`: `npm test` passed **112/112** (`test/vault.test.js` 17/17 + `test/core.test.js` + `test/background.test.js` + `test/content.test.js` + `test/release.test.js`), syntax check passed (`node --check` 7/7 / `npm run check --script-shell=bash`), and `git diff --check` passed.
-- Rebuilt `dist/job-notifier-2.0.0.zip` at `e7cd5da` (SHA-256 `5F682FA66D4BC150A8275DFE16A2AB13E235989A8901A781C6B4AB284E02092C`); runtime allowlist and secret scan verified.
+- Encryption reviews passed (`security` PASS in Rounds 1–2, `ui-designer` PASS in Round 2, `code-reviewer` PASS in Round 3).
 - Updated store assets (`docs/assets/screenshot-1-overlay.png`, `screenshot-3-settings.png`, `screenshot-4-prompt.png`, `promo-440x280.png`) and headless review screenshots (`dist/review-vault-r2/`).
-- PM milestone closeout completed for passphrase encryption (`P-01`–`P-10` and `1`–`38` audited, handoff log updated, `HANDOFF.md` updated, and release retro drafted).
+- Real-Chrome release walkthrough written: [docs/release-walkthrough.md](docs/release-walkthrough.md) (`befe0c4`).
+- CI on PR #5 caught a CRLF/LF mismatch in the bundled IBM Plex license (criterion 38). Fixed in `fa35c09` (font files stored without line-ending conversion).
+- Verification at HEAD `b33a65c`:
+  - `npm test` 112/112.
+  - `npm run check --script-shell=bash` passes.
+  - Release zip rebuilt at HEAD: 27 entries (runtime files plus LICENSE), no key-shaped strings, and the IBM Plex license matches its logged SHA-256. SHA-256 `a972905259c46777057c7d70591759f1fa6126302fc71b7232c0b774d8837f44` (replaces the `e7cd5da` zip, `5F68…`).
+- PR #5 (release, against `main`): CI 2/2 green and mergeable. PR #4 (Stop hook): CI green.
+- PM pre-sign-off audit (2026-11-26): 20 of 48 criteria met, 28 pending manual Chrome evidence, 0 not met. The audit is in the handoff log of [docs/specs/public-release.md](docs/specs/public-release.md).
+- Interim retro written to the shared team-notes `retros.md`. The earlier milestone closeout said a retro was drafted, but that draft was never saved.
 
 ## Next
-- User runs the clean-profile Chrome walkthrough in [docs/release-walkthrough.md](docs/release-walkthrough.md) (load unpacked `dist/job-notifier-2.0.0.zip`, verify passphrase setup/unlock/lock/reset/P3 flows, live keyboard/focus, `use_dynamic_url` & `sender.url`, permissions, navigation cleanup, copy failure, XSS literal rendering, and zero requests before click).
-- User recaptures `docs/assets/screenshot-2-popup.png` as a whole Chrome window (1280x800 RGB PNG with toolbar visible, unlocked `"Job posting found"` + `"Unlocked for this session · Lock now"` footer).
-- Verify remote CI passes on release PR #5 (opened against `main`; first run failed on font license line endings, fixed in `fa35c09`).
-- Final PM release closeout after real-Chrome evidence and PR/CI pass.
+1. The user runs the clean-profile Chrome walkthrough in [docs/release-walkthrough.md](docs/release-walkthrough.md), including section 13 (recapture `docs/assets/screenshot-2-popup.png` as the whole window), and reports back as its "Report back" section describes. qa's headless Edge pre-check (`docs/walkthrough-auto/RESULTS.md`) lands first as an early signal.
+2. The lead commits the new screenshot and re-runs `npm test`. PM does the final sign-off: marks each of the 28 pending criteria met or not met, and appends the retro addendum.
+3. Merge PR #4, then PR #5.
+4. The user submits to the Chrome Web Store, following the "Before you submit" checklist in `docs/store-listing.md`.
 
 ## Blocked
-- None for code or packaging. Real-Chrome manual checks, whole-window `screenshot-2-popup.png`, PR/CI verification, and Chrome Web Store submission are pending user steps.
+- Nothing in code, tests, or packaging.
+- Final sign-off is waiting on the user's walkthrough evidence for 28 criteria. The merges wait on sign-off, and the store submission waits on the merges.
