@@ -12,3 +12,7 @@
 /.gitattributes export-ignore
 /PROGRESS.md export-ignore
 /HANDOFF.md export-ignore
+
+# Bundled font files and their licenses are stored byte-for-byte as downloaded
+# (no line-ending conversion), so they match the SHA-256 values logged in the spec.
+/fonts/** -text
