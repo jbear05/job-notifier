@@ -84,12 +84,12 @@ const STEPS = [
   ['13.1', 0, 'Screenshot 2: set up the state'], ['13.2', 0, 'Screenshot 2: snip the window'], ['13.3', 0, 'Screenshot 2: convert and npm test'],
   ['X1', 0, 'Extra: content-script negatives (32a)'], ['X2', 0, 'Extra: API error mapping (9, 25)'], ['X3', 0, 'Extra: what the request carries (15)'],
   ['X4', 0, 'Extra: closing a tab clears its posting'], ['X5', 0, 'Extra: no errors logged during the run'],
-  ['X6', 0, 'Extra: vault messages use the worker-only port (security Low 2)'],
+  ['X6', 0, 'Extra: vault messages go directly to the service worker (security Low 2)'],
   // Security's real-Chrome checks from its vault review (docs/specs/passphrase-storage.md handoff log, 2026-11-26).
   ['V1', 1, 'Vault #1: a content script can\'t read the session key or see it change'], ['V2', 0, 'Vault #2: password-manager prompts'],
   ['V3', 1, 'Vault #3: a relaunch without re-adding the extension stays locked'], ['V4', 0, 'Vault #4: windows closed while Chrome keeps running'],
   ['V5', 1, 'Vault #5: an extension reload stays locked'], ['V6', 1, 'Vault #6: Lock right after Find friends sends no request'],
-  ['V7', 1, 'Vault #7: no key, friend, passphrase, or session key in the profile\'s LevelDB'], ['V8', 0, 'Vault #8: storage setAccessLevel support (report)'],
+  ['V7', 1, 'Vault #7: no key, friend, draft, passphrase, or session key in the browser profile'], ['V8', 0, 'Vault #8: storage setAccessLevel support (report)'],
 ];
 const NOT_AUTOMATED = {
   '13.1': 'Needs a real Chrome window with its toolbar; headless has no browser UI.',
@@ -510,7 +510,10 @@ class Run {
     // X6 records message types only. It never logs the values sent by settings.
     await S.raw(`globalThis.__jnChannels || (globalThis.__jnChannels = true,
       chrome.runtime.onMessage.addListener((m, s) => { console.debug('JNCHAN sendMessage', m && m.type, s.url); }),
-      chrome.runtime.onConnect.addListener(p => p.onMessage.addListener(m => console.debug('JNCHAN port:' + p.name, m && m.type, p.sender.url))),
+      chrome.runtime.onConnect.addListener(p => {
+        const url = p.sender?.url;
+        if (url?.includes('/options.html')) console.debug('JNCHAN port:' + p.name, 'PORT_OPEN', url);
+      }),
       self.addEventListener('message', e => { console.debug('JNCHAN service-worker', e.data?.type, e.source?.url); }))`).catch(() => {});
     this.swSession = S;
     return S;
@@ -1375,7 +1378,7 @@ async function runA() {
 
   await step('X6', async () => {
     const { extensionMessages, directMessages } = A.channels();
-    eq('X6', 'run A: secret-carrying vault messages from settings over extension messaging', extensionMessages.filter(t => SECRET_TYPES.includes(t)), []);
+    eq('X6', 'run A: extension ports or sensitive extension messages from settings', extensionMessages.filter(t => t === 'PORT_OPEN' || SECRET_TYPES.includes(t)), []);
     const seen = new Set(directMessages);
     eq('X6', 'run A: flows not seen at the service worker (setup 2.2, save 3.3/3.5, unlock 4.3, reset 12.2, P3 12.5)',
       ['VAULT_SETUP', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_UNLOCK', 'VAULT_GET_DATA', 'VAULT_RESET', 'VAULT_CONVERT_LEGACY'].filter(t => !seen.has(t)), []);
@@ -1889,6 +1892,7 @@ async function runB() {
 
   await step('9.3', async () => {
     await B.posting(P, tabId);
+    await P.send('Page.bringToFront');
     await P.js("_q('a.apply').focus(); return true;");
     await P.key('Enter');
     const O = await B.overlay(P);
@@ -1908,15 +1912,30 @@ async function runB() {
     eq('9.3', 'rings', fwd.map(f => f[1]), [true, true, true, true]);
     check('9.3', !page.includes('receipt'), `page focus during the cycle: ${J([...new Set(page)])}`);
     const world = B.contentWorld(P);
-    if (world) note('9.3', `content script will return focus to: ${await P.raw("returnFocus ? (returnFocus.id || returnFocus.tagName) : 'nothing'", { contextId: world.id }).catch(e => e.message)}`);
+    const returnTo = world && await P.raw("returnFocus ? (returnFocus.id || returnFocus.tagName) : 'nothing'", { contextId: world.id });
+    eq('9.3', 'content script recorded the intended return-focus target', returnTo, 'receipt');
     await P.key('Escape');
     await P.until("!_q('iframe[title=\"Job Notifier\"]')", 3000);
     eq('9.3', 'after Escape: focus, :focus-visible', await P.v("[_t(document.activeElement), document.activeElement.matches(':focus-visible')]"), ['Download receipt', true]);
   });
 
   await step('9.4', async () => {
-    await B.confirm(P, tabId);
-    await P.mouse(60, 700);
+    async function clickScrim(O) {
+      await P.send('Page.bringToFront');
+      const [x, y, target] = await O.v(`(() => {
+        const r = _id('scrim').getBoundingClientRect();
+        const x = r.left + 4, y = r.top + r.height / 2;
+        return [x, y, document.elementFromPoint(x, y)?.id];
+      })()`);
+      eq('9.4', 'click point lands on the dimmed area', target, 'scrim');
+      const [left, top] = await P.v(`(() => {
+        const r = _q('iframe[title="Job Notifier"]').getBoundingClientRect();
+        return [r.left, r.top];
+      })()`);
+      await P.mouse(left + x, top + y);
+    }
+    const prompt = await B.confirm(P, tabId);
+    await clickScrim(prompt);
     const closed = await P.until("!_q('iframe[title=\"Job Notifier\"]')", 3000).then(() => true, () => false);
     eq('9.4', 'click on the dimmed area closes the prompt', closed, true);
     const O = await B.confirm(P, tabId);
@@ -1936,7 +1955,7 @@ async function runB() {
       check('9.4', seq.some(s => want.test(s[0])), `Tab reaches ${want.source.replace(/[\\^$]/g, '')}`);
     }
     eq('9.4', 'controls without the ring', seq.filter(s => !s[1]).map(s => s[0]), []);
-    await P.mouse(60, 700);
+    await clickScrim(O);
     await sleep(500);
     eq('9.4', 'dimmed-area click in results', await B.hasFrame(P), true);
     await O.js("_id('state-heading').focus(); return true;");
@@ -2067,7 +2086,7 @@ async function runB() {
 
   await step('X6', async () => {
     const { extensionMessages, directMessages } = B.channels();
-    eq('X6', 'run B: secret-carrying vault messages from settings over extension messaging', extensionMessages.filter(t => SECRET_TYPES.includes(t)), []);
+    eq('X6', 'run B: extension ports or sensitive extension messages from settings', extensionMessages.filter(t => t === 'PORT_OPEN' || SECRET_TYPES.includes(t)), []);
     note('X6', `run B: settings used extension messaging for ${J([...new Set(extensionMessages)])} and direct worker messages for ${J([...new Set(directMessages)])}`);
   });
 
@@ -2081,10 +2100,10 @@ async function runB() {
 
   await step('V7', async () => {
     if (!check('V7', !!vaultKey, 'read the session key while unlocked')) return;
-    const needles = [['API key', KEY], ['friend name', 'Priya Shah'], ['friend email', 'priya.shah@example.com'], ['passphrase', PASS], ['session vaultKey', vaultKey]];
+    const needles = [['API key', KEY], ['friend name', 'Priya Shah'], ['friend email', 'priya.shah@example.com'], ['generated draft', 'Hey Priya Shah, Kestrel Grid'], ['passphrase', PASS], ['session vaultKey', vaultKey]];
     const hits = scanProfile(B.profile, needles);
     eq('V7', `plaintext secrets in the profile's LevelDB files (${hits.levelDbFiles} files searched)`, hits.levelDb, []);
-    note('V7', `outside LevelDB (other profile files, for the #2 password-manager check): ${J(hits.other)}`);
+    eq('V7', 'plaintext secrets in other profile files, including session restore', hits.other, []);
   });
 }
 

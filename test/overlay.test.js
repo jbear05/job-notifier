@@ -84,6 +84,32 @@ const RESULT = {
   },
 };
 
+function formOwner(container, control) {
+  const associated = control.getAttribute('form');
+  return container.find(el => el.tagName === 'FORM' &&
+    (associated ? el.getAttribute('id') === associated : el.find(child => child === control)));
+}
+
+test('vault privacy: editable drafts opt out of browser form restore through their owning form', async () => {
+  const o = await openOverlay();
+  const other = { name: 'Jess', contact: 'jess@example.com', score: 0.8, message: 'Hey Jess, this role fits your skills.' };
+  const matches = [...RESULT.result.matches, other];
+  await o.findFriends({ ...RESULT, result: { ...RESULT.result, matches } });
+  const panel = o.$('panel-body');
+
+  for (const { name, message } of matches) {
+    const draft = panel.find(el => el.tagName === 'TEXTAREA' && el.getAttribute('aria-label') === `Message to ${name}`);
+    assert.equal(draft?.value, message, `shows the draft for ${name}`);
+    assert.equal(draft.getAttribute('readonly'), null, 'the draft stays editable');
+    assert.equal(formOwner(panel, draft)?.getAttribute('autocomplete'), 'off', 'Chromium uses the owning form’s setting for textarea state restoration');
+  }
+
+  const recruiter = panel.find(el => el.getAttribute('id') === 'recruiter-input');
+  assert.ok(recruiter?.tagName === 'INPUT', 'the optional recruiter field stays editable');
+  assert.ok(recruiter.getAttribute('autocomplete') === 'off' || formOwner(panel, recruiter)?.getAttribute('autocomplete') === 'off',
+    'the browser must also omit recruiter contact from form restore');
+});
+
 // Every state from the Find friends click on (Design, "Scrim clicks", revised 2026-11-26): how to reach it, and its heading.
 const AFTER_FIND_FRIENDS = [
   ['loading', o => o.findFriends(), 'Finding friends…'],
@@ -179,7 +205,15 @@ test('criterion 10 / walkthrough 10.3: copying falls back to execCommand when th
   const o = await openOverlay();
   o.ctx.navigator.clipboard.writeText = async () => { throw new Error('blocked by permissions policy'); };
   const copied = [];
-  o.ctx.document.execCommand = command => { copied.push(command); return true; };
+  let unprotectedTextarea = false;
+  o.ctx.document.execCommand = command => {
+    copied.push(command);
+    const body = o.document.body;
+    const textarea = body.find(el => el.tagName === 'TEXTAREA');
+    unprotectedTextarea = !!textarea && formOwner(body, textarea)?.getAttribute('autocomplete') !== 'off';
+    return true;
+  };
   assert.equal(await vm.runInContext('copyText("draft text")', o.ctx), true);
   assert.deepEqual(copied, ['copy']);
+  assert.equal(unprotectedTextarea, false, 'a temporary clipboard textarea must also opt out of form restore');
 });

@@ -14,7 +14,9 @@
   </main>
   <script>
     // Shows the page is still clickable (walkthrough step 8.1) and is where focus returns.
-    document.getElementById('receipt').onclick = e => { e.target.textContent = 'Receipt clicked'; };
+    const receipt = document.getElementById('receipt');
+    receipt.focus();
+    receipt.onclick = e => { e.target.textContent = 'Receipt clicked'; };
   </script>
 </body>
 </html>

@@ -57,17 +57,17 @@ async function copyText(text) {
   } catch (e) {
     const back = document.activeElement;
     const ta = h('textarea', { class: 'vh', 'aria-hidden': 'true', tabindex: '-1', readonly: true, value: text });
-    document.body.append(ta);
-    ta.select();
-    let ok = false;
+    const form = h('form', { autocomplete: 'off' }, ta);
+    document.body.append(form);
     try {
-      ok = document.execCommand('copy');
+      ta.select();
+      return document.execCommand('copy');
     } catch (e2) {
-      ok = false;
+      return false;
+    } finally {
+      form.remove();
+      if (back && back.focus) back.focus();
     }
-    ta.remove();
-    if (back && back.focus) back.focus();
-    return ok;
   }
 }
 
@@ -236,7 +236,8 @@ function resultsView({ job, matches }) {
   });
   updateBulk();
 
-  return [
+  // Chromium checks a textarea's owning form when saving session restore state.
+  return [h('form', { class: 'stack', autocomplete: 'off', novalidate: true, onsubmit: e => e.preventDefault() },
     jobSummary(job),
     h('div', { class: 'field' },
       h('label', { class: 'label', for: 'recruiter-input' }, 'Do you have a recruiter contact for this position?'),
@@ -247,6 +248,5 @@ function resultsView({ job, matches }) {
       row(next, copyAll),
       bulkAlert,
       h('p', { class: 'small muted' }, 'Browsers only allow one email window per click, so this opens the checked emails one at a time.')),
-    live,
-  ];
+    live)];
 }
