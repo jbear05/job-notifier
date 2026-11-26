@@ -24,7 +24,15 @@ Make the Job Notifier Chrome extension (Manifest V3) ready for a public Chrome W
 ## Verification (Windows; latest at `b33a65c`, 2026-11-26)
 - Latest: `npm test` 112/112; check passes; PR #5 CI 2/2 green and mergeable; release zip rebuilt at HEAD after the font-license fix (`fa35c09`): 27 entries, no key-shaped strings, SHA-256 `a972905259c46777057c7d70591759f1fa6126302fc71b7232c0b774d8837f44` (supersedes the `5F68…` hash below).
 - PM pre-sign-off audit (handoff log of `docs/specs/public-release.md`): 20/48 criteria met, 28 pending manual Chrome evidence, 0 not met. Interim retro in `C:\Users\jairg\Documents\team-notes\retros.md`.
-- qa automated pre-check in headless Edge 158 (Chrome 157 no longer accepts `--load-extension`; Edge does): `docs/walkthrough-auto/precheck.js`, results in `docs/walkthrough-auto/RESULTS.md`, mocked Anthropic API. Was in progress at this update.
+- qa automated pre-check (`docs/walkthrough-auto/precheck.js`, results in `docs/walkthrough-auto/RESULTS.md`): runs in headless Chrome 157 (loads the unpacked build over the DevTools pipe with `--enable-unsafe-extension-debugging`) and Edge 158, with every Anthropic request mocked. First run: 71/74 steps automated, 68 PASS, 3 FAIL (7.1/7.2 pushState/hash wiping the prompt; 8.4 a double-click closing the overlay) plus a clipboard permissions-policy finding (10.3). All fixed test-first in `0097ab7` (146/146): prompts follow `sender.documentId` with a DOCUMENT_PING before use, OVERLAY_CLOSE always removes the frame, the scrim closes only the pre-request prompt (designer's rule, Design "Scrim clicks"), and frame `allow` is `clipboard-write chrome-extension://<id>` (security approved). The pre-check has not been re-run since the fixes.
+- Independent security review of the vault at `62b7c48`: PASS, six Lows (see the end of `docs/specs/passphrase-storage.md`'s handoff log). Lead decisions: fix Lows 1 (lock race in `analyze()`), 2 (send secrets over a worker-only port, not `runtime.sendMessage`), 3 (settings copy says "settings" are encrypted), 5 ("quit Chrome completely") and 6 (store listing's passphrase answer); accept Low 4 (dev-only plaintext leftovers) as a residual.
+
+## Current round (2026-11-26)
+1. qa: failing tests for vault Lows 1, 2, 3, 5 and 6, and security's automatable real-Chrome checks added to precheck.js (#1 content-script isolation of `storage.session`, #3 real relaunch locked, #5 reload locked, #6 lock race, #7 LevelDB grep, #8 `setAccessLevel` support). In progress when this was written.
+2. engineer: fix Lows 1, 2, 3, 5 and 6 until the tests pass.
+3. Re-review in parallel: reviewer (code since `5a993bf`), security (the fixes plus the port change), designer (copy changes).
+4. qa: re-run the full pre-check in Chrome and Edge, including the new security checks; update RESULTS.md and the walkthrough's manual list.
+5. Lead: commit, push, and give the user the shortened manual list (permission dialog, popup turn-off, mail app, password-manager bubble, windows-closed behavior, look, whole-window screenshot 2).
 
 Earlier, at `e7cd5da`:
 - `npm test`: **112 passed, 0 failed** (`test/vault.test.js` 17/17 + `test/core.test.js` + `test/background.test.js` + `test/content.test.js` + `test/release.test.js`).
