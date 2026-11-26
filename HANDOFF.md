@@ -49,11 +49,11 @@ Make the Job Notifier Chrome extension (Manifest V3) ready for a public Chrome W
    - Dynamic `overlay.html` iframe loading (`use_dynamic_url`) and `sender.url` check, `chrome.permissions` grant/revoke + `getRegisteredContentScripts()`, `pushState`/hash navigation vs full navigation cleanup, copy failure UI, XSS literal rendering, and Network panel showing zero requests to `api.anthropic.com` or font CDNs before **Find friends**.
 2. **Whole-window popup screenshot:** Recapture `docs/assets/screenshot-2-popup.png` manually in real Chrome (1280x800 RGB PNG, whole browser window with toolbar visible, unlocked popup in `"Job posting found"` showing `"Unlocked for this session · Lock now"` footer) and commit/re-run `npm test` + `npm run package` if committed assets change.
 3. **Release PR & remote CI:** PR #5 is open against `main` (it carries PR #4's commit until #4 merges). Confirm CI passes after `fa35c09`; Auto-fix reports failures to the lead session.
-4. **Final PM closeout & store submission:** PM drafted the release retro in chat, not yet written to disk pending confirmation of the team directory below; save the retro and complete final v2.0.0 release closeout after real-Chrome evidence and CI pass. User handles Chrome Web Store developer submission.
+4. **Final PM closeout & store submission:** PM's earlier retro draft was never saved; pm writes the release retro to `C:\Users\jairg\Documents\team-notes\retros.md` (the shared team folder, also an Obsidian vault) and completes final v2.0.0 release closeout after real-Chrome evidence and CI pass. User handles Chrome Web Store developer submission.
 
 ## Open questions for the user
 - Change the global CLAUDE.md handoff rule to "write the handoff only when usage is actually running low"?
-- The global CLAUDE.md now points team files at `~/.gemini/team/`, while the team uses `C:\Users\jairg\.claude\team\`. Intended?
+- Resolved 2026-11-26: team files (retros, scorecard, proposals, changelog) live in `C:\Users\jairg\Documents\team-notes\`, used by Claude, Gemini and Codex through the shared global instruction file. The old copies in `C:\Users\jairg\.claude\team\` are stale and can be deleted by the user.
 
 ## Resume prompt
 "Lead the Job Notifier v2.0.0 release from the next unchecked action. Read HANDOFF.md, PROGRESS.md, and the Handoff logs in docs/specs/public-release.md and docs/specs/passphrase-storage.md. Collect the user's clean-profile Chrome walkthrough evidence and whole-window screenshot-2-popup.png, open the feat/public-release PR and verify remote CI, then run final PM closeout."
