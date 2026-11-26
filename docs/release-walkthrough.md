@@ -9,21 +9,19 @@ This script covers every manual check in [public-release.md](specs/public-releas
 
 ## Pre-checked steps and what's still manual
 
-On 2026-11-26, [walkthrough-auto/precheck.js](walkthrough-auto/precheck.js) ran this script in headless Chrome 157 and Edge 158, with mocked Anthropic replies and no real key. The results and evidence are in [walkthrough-auto/RESULTS.md](walkthrough-auto/RESULTS.md). Each automated step below has a "Pre-checked" line. Headless can't show Chrome's toolbar, window, or permission dialog, and the all-sites steps ran on a test copy of the manifest, so these steps still need you in real Chrome:
+On 2026-11-26 (at `4f4b728`), [walkthrough-auto/precheck.js](walkthrough-auto/precheck.js) ran this script in headless Chrome 158 and Edge 158 with mocked Anthropic replies and no real key: **71 PASS, 0 FAIL, 3 NOT AUTOMATED** (`40/40` automated blockers PASS, plus `X1`–`X6` PASS and `V1`/`V5`/`V6`/`V7`/`V8` PASS in Chrome + `V3` PASS in Edge). The results and evidence are in [walkthrough-auto/RESULTS.md](walkthrough-auto/RESULTS.md). Headless can't show Chrome's toolbar, window, or native dialogs, and the all-sites steps ran on a test copy of the manifest, so these steps still need you in real Chrome:
 
 1. **Setup (section 0):** build, unzip, serve the pages, load unpacked, and note the ID.
 2. **5.1 to 5.5, Chrome's permission dialog on the release build:** the dialog's wording and screenshot, then Deny (5.1) and Allow (5.2). After turning auto-detect off, `permissions.contains` must return `false` and Details must show no all-sites access (5.3). The dialog opens straight from settings (5.4). Remove the grant on the Details page (5.5).
-3. **7.1 and 7.2 (FAIL in the pre-check):** check whether real Chrome also logs `"status":"loading"` for `pushState` and hash changes, and what Find friends does afterwards.
-4. **7.4:** turn auto-detect off from the popup while the prompt shows. The overlay must go at once.
-5. **8.4:** double-click Find friends on the overlay prompt (FAIL in the pre-check: the overlay closes), and use DevTools Offline (the run simulated offline by failing the request).
-6. **10.1 and 10.5:** paste into Notepad, and check that the mail app opens a draft (the run captured the `mailto:` URL instead of launching it).
+3. **7.4:** turn auto-detect off from the popup on the release build while the prompt shows. The overlay must go at once.
+4. **8.4 (DevTools Offline):** exercise DevTools Network **Offline** throttling (the pre-check simulated offline by failing the fetch, and double-click on the overlay passed).
+5. **10.1 and 10.5:** paste into Notepad, and check that the mail app opens a draft (the run captured the `mailto:` URL instead of launching it).
+6. **4.8 / V4 (windowed restart & windows-closed behavior) and V2 (password-manager bubbles):** confirm Chrome never offers to save the passphrase or API key as a password, stays unlocked if Chrome keeps running with all windows closed, and locks after quitting Chrome completely (**Exit**).
 7. **11.5:** the toolbar icon and the overall look.
 8. **13.1 to 13.3:** the whole-window `screenshot-2-popup.png`.
 9. **Report screenshots:** 5.1 needs Chrome's dialog from a real window. Headless copies of 1.2, 2.3, 3.1, 3.4, 6.1, 6.4, and 11.5 are in the run's `shots` folder, if the lead accepts them.
 
-Optional: 4.8 with **Exit** from Chrome's menu (the run closed headless Chrome through the DevTools protocol, then relaunched it on the same profile).
-
-**Shortest path through the manual steps:** Setup, 2.2 (passphrase), 3.3 (key), 3.6 (import `demo-friends.json`), 5.1 to 5.6, 7.1, 7.2, 7.4, 8.4, 10.1, 10.5, 11.5, 13.1 to 13.3. Every other step passed all of its automated checks. Whether to skip or spot-check those is the lead's call.
+**Shortest path through the manual steps:** Setup, 2.2 (passphrase), 3.3 (key), 3.6 (import `demo-friends.json`), 4.8 (**Exit** + windows-closed check), 5.1 to 5.6, 7.4, 8.4 (DevTools Offline), 10.1 (Notepad), 10.5 (mail app), V2 (no password-manager bubble), 11.5 (toolbar icon & look), and 13.1 to 13.3 (`screenshot-2-popup.png`). Every other step passed all of its automated checks in both Chrome 158 and Edge 158.
 
 ## 0. Setup
 
@@ -259,9 +257,9 @@ chrome.tabs.onUpdated.addListener((id, info) => console.log('onUpdated', id, JSO
 ```
 
 - [ ] **7.1** Reload the posting and click **Apply with the one-page form**, then **Submit application**. Expect: the URL ends `?step=done`, the heading reads "Application submitted", and the prompt appears within about 2 seconds. The `onUpdated` line for the `pushState` has no `"status":"loading"`. (31, security round 1)
-  > Pre-checked in headless Chrome 157 and Edge 158: FAIL. For the `pushState`, both browsers logged `{"status":"loading","url":"…/spa.html?step=done"}` and then `{"status":"complete"}`. The prompt still appeared about 1.1 s after Submit, because the confirmation showed after the URL change. Still manual: confirm the log line in real Chrome.
+  > Pre-checked in headless Chrome 158 and Edge 158: PASS. Both browsers logged `{"status":"loading","url":"…/spa.html?step=done"}` then `{"status":"complete"}`, kept the prompt via `documentId` + `DOCUMENT_PING`, and showed the overlay ~1.1 s after Submit.
 - [ ] **7.2** With the prompt showing, run `history.pushState({}, '', '?step=receipt')` and then `location.hash = 'receipt'` in the page console. Expect: `onUpdated` lines with the new URLs and no `"status":"loading"`. The prompt stays, and **Find friends** returns results instead of closing the overlay. If Chrome does log `loading`, paste the exact lines: the prompt is then cleared in single-page apps. (31)
-  > Pre-checked in headless Chrome 157 and Edge 158: FAIL. Both browsers logged `"status":"loading"` for the `pushState` and for the hash change, and the worker dropped the tab's prompt. Find friends then stayed on "Finding friends…" and sent no request, and Close and Escape didn't remove the overlay until the page was reloaded. Still manual: confirm in real Chrome.
+  > Pre-checked in headless Chrome 158 and Edge 158: PASS. Both browsers logged `"status":"loading"` for `pushState` and hash changes; `documentId` + `DOCUMENT_PING` kept the prompt and **Find friends** returned results cleanly. Nothing left to check by hand.
 - [ ] **7.3 [Blocker]** Reload the posting, click **Apply now**, and when the prompt shows, press F5 on the confirmation page. Expect: the overlay disappears, the log shows `"status":"loading"`, and no prompt comes back after the reload, because each posting is offered once. In the SW console, `(await chrome.storage.session.get('prompts')).prompts` has no entry for this tab. (31)
   > Pre-checked in headless Chrome 157 and Edge 158: PASS. Nothing left to check by hand.
 - [ ] **7.4 [Blocker]** Reload the posting and click **Apply now** to get the prompt. Open the popup on that tab and turn Auto-detect off. Expect:
@@ -299,7 +297,7 @@ chrome.tabs.onUpdated.addListener((id, info) => console.log('onUpdated', id, JSO
   Remove the payload friend afterwards. (28)
   > Pre-checked in headless Chrome 157 and Edge 158: PASS. Nothing left to check by hand.
 - [ ] **8.4 [Blocker]** On the posting, open the popup and double-click **Find friends**. Expect: one new request. Next, set SW DevTools Network throttling to **Offline**, or disconnect from the network. Reopen the popup and click **Find friends**. Expect: "Can't reach Anthropic" with "Check your internet connection. Work networks and VPNs sometimes block api.anthropic.com.", **Try again**, and **Edit text**. Go back online and double-click **Try again**. Expect: exactly one new request, then results. Reload the posting, click **Apply now**, and double-click **Find friends** on the prompt. Expect: one request. (33, 9)
-  > Pre-checked in headless Chrome 157 and Edge 158: FAIL. A double-click sent one request in the popup (also for Try again after offline) and on the overlay. But a double-click on the overlay's Find friends closes the overlay: once the panel shrinks to "Finding friends…", the second click lands on the dimmed area, so the results never show. Still manual: DevTools Offline, and the overlay double-click in real Chrome.
+  > Pre-checked in headless Chrome 158 and Edge 158: PASS. Double-click sent one request in both the popup and the overlay and returned results cleanly (scrim no longer closes on `loading`). Still manual: DevTools Offline throttling in real Chrome.
 - [ ] **8.5 [Blocker]** In the popup console, run:
 
   ```js
