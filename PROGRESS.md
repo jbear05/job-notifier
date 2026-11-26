@@ -12,9 +12,9 @@ Specs: [docs/specs/public-release.md](docs/specs/public-release.md) and [docs/sp
 - PM milestone closeout completed for passphrase encryption (`P-01`–`P-10` and `1`–`38` audited, handoff log updated, `HANDOFF.md` updated, and release retro drafted).
 
 ## Next
-- User runs the clean-profile Chrome walkthrough (load unpacked candidate/`dist/job-notifier-2.0.0.zip`, verify passphrase setup/unlock/lock/reset/P3 flows, live keyboard/focus, `use_dynamic_url` & `sender.url`, permissions, navigation cleanup, copy failure, XSS literal rendering, and zero requests before click).
+- User runs the clean-profile Chrome walkthrough in [docs/release-walkthrough.md](docs/release-walkthrough.md) (load unpacked `dist/job-notifier-2.0.0.zip`, verify passphrase setup/unlock/lock/reset/P3 flows, live keyboard/focus, `use_dynamic_url` & `sender.url`, permissions, navigation cleanup, copy failure, XSS literal rendering, and zero requests before click).
 - User recaptures `docs/assets/screenshot-2-popup.png` as a whole Chrome window (1280x800 RGB PNG with toolbar visible, unlocked `"Job posting found"` + `"Unlocked for this session · Lock now"` footer).
-- Open PR for `feat/public-release` and verify remote CI passes.
+- Verify remote CI passes on release PR #5 (opened against `main`; first run failed on font license line endings, fixed in `fa35c09`).
 - Final PM release closeout after real-Chrome evidence and PR/CI pass.
 
 ## Blocked

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Review your application | Kestrel Grid</title>
+  <link rel="stylesheet" href="../assets/harness/demo-site.css" />
+</head>
+<body>
+  <header class="site"><span class="brand">Kestrel Grid</span><nav><span>Careers</span><span>Teams</span><span>Life at Kestrel</span></nav></header>
+  <main>
+    <h1 id="heading">Review your application</h1>
+    <p id="note">Check your details, then submit.</p>
+    <button id="submit" type="button">Submit application</button>
+  </main>
+  <script>
+    // Same-document navigation, like a single-page job site: the URL changes with no page load.
+    document.getElementById('submit').onclick = e => {
+      history.pushState({}, '', '?step=done');
+      document.title = 'Application submitted | Kestrel Grid';
+      document.getElementById('heading').textContent = 'Application submitted';
+      document.getElementById('note').textContent = 'Thanks for applying to Kestrel Grid.';
+      e.target.textContent = 'View application';
+    };
+  </script>
+</body>
+</html>

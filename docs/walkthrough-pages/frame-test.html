@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Frame test</title>
+</head>
+<body>
+  <h1>Frame test</h1>
+  <p>Paste an overlay URL, then frame it. A tab with no pending prompt must show nothing.</p>
+  <input id="url" size="90" value="chrome-extension://EXTENSION_ID/overlay.html" />
+  <button id="go" type="button">Frame it</button>
+  <iframe id="frame" title="Frame test" style="display: block; width: 100%; height: 420px; margin-top: 12px; border: 1px solid #888"></iframe>
+  <script>
+    document.getElementById('go').onclick = () => {
+      document.getElementById('frame').src = document.getElementById('url').value.trim();
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+[
+  { "name": "Priya Shah", "contact": "priya.shah@example.com", "skills": ["Go", "PostgreSQL", "distributed systems"], "interests": ["climate", "infrastructure"], "level": "Mid level", "notify": true },
+  { "name": "Marcus Lee", "contact": "marcus.lee@example.com", "skills": ["Python", "SQL", "data pipelines"], "interests": ["analytics", "sports"], "level": "New grad", "notify": true },
+  { "name": "Dana Okafor", "contact": "dana.okafor@example.com", "skills": ["React", "TypeScript", "design systems"], "interests": ["education", "accessibility"], "level": "Senior", "notify": true },
+  { "name": "Leo Martins", "contact": "leo.martins@example.com", "skills": ["Python", "SQL", "Airflow"], "interests": ["energy", "data infrastructure"], "level": "Internship", "notify": true }
+]

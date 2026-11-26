@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Application submitted | Kestrel Grid</title>
+  <link rel="stylesheet" href="../assets/harness/demo-site.css" />
+</head>
+<body>
+  <header class="site"><span class="brand">Kestrel Grid</span><nav><span>Careers</span><span>Teams</span><span>Life at Kestrel</span></nav></header>
+  <main>
+    <h1>Thanks for applying to Kestrel Grid</h1>
+    <p>Your application has been submitted. A copy is on its way to your inbox.</p>
+    <button id="receipt" type="button" autofocus>Download receipt</button>
+  </main>
+  <script>
+    // Shows the page is still clickable (walkthrough step 8.1) and is where focus returns.
+    document.getElementById('receipt').onclick = e => { e.target.textContent = 'Receipt clicked'; };
+  </script>
+</body>
+</html>

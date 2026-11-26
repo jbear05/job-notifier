@@ -7,7 +7,7 @@ Make the Job Notifier Chrome extension (Manifest V3) ready for a public Chrome W
 
 ## Where things are
 - Repo: `C:\Users\jairg\Desktop\Stuff\Prgrm Portfolio\job-notifier` (GitHub `jbear05/job-notifier`, public).
-- Branch `feat/public-release`, stacked on `chore/claude-test-hook` (PR #4 was open at the prior session's last check; not re-queried on GitHub in this session). No release PR opened yet.
+- Branch `feat/public-release`, stacked on `chore/claude-test-hook` (PR #4 open, CI green). Release PR [#5](https://github.com/jbear05/job-notifier/pull/5) is open against `main` with Auto-fix on; its first CI run failed on criterion 38 (font license line endings), fixed in `fa35c09`.
 - Checkpoints:
   - Pre-encryption release phase: `f30f29a` (logic, security, docs, packaging), `208bda3` (UI and overlay), `396e478` (icon and store images), `7214fd5` (round 1 fixes), `4fbfdb7` (refreshed images and round 2 reviews), `5a993bf` (reviewed navigation and overlay fixes, 95/95 tests).
   - Passphrase encryption phase: `e7cd5da` (PBKDF2-SHA256 600k + AES-256-GCM vault, P1–P3 lifecycle, UI states, updated docs/listing/assets, Round 3 fixes, 112/112 tests, rebuilt release ZIP), `9562d31` (PM milestone closeout in `PROGRESS.md`, `HANDOFF.md`, and `docs/specs/passphrase-storage.md`).
@@ -43,12 +43,12 @@ Make the Job Notifier Chrome extension (Manifest V3) ready for a public Chrome W
   - Round 3: `code-reviewer` PASS.
 
 ## Next actions, in order
-1. **User clean-profile Chrome walkthrough:** Load `dist/job-notifier-2.0.0.zip` unpacked in a clean Chrome profile and verify:
+1. **User clean-profile Chrome walkthrough:** follow [docs/release-walkthrough.md](docs/release-walkthrough.md) (74 steps, 40 release blockers, local test pages in `docs/walkthrough-pages/`). It covers:
    - Passphrase setup, wrong passphrase, lock (`Lock now`) from settings & popup, browser restart staying locked, P3 conversion & cancel/reset confirmation flows, and multi-tab settings sync.
    - Live keyboard/focus flow across settings, popup, and overlay (Escape, Tab wrap, focus return, visible focus rings, `aria-invalid` borders).
    - Dynamic `overlay.html` iframe loading (`use_dynamic_url`) and `sender.url` check, `chrome.permissions` grant/revoke + `getRegisteredContentScripts()`, `pushState`/hash navigation vs full navigation cleanup, copy failure UI, XSS literal rendering, and Network panel showing zero requests to `api.anthropic.com` or font CDNs before **Find friends**.
 2. **Whole-window popup screenshot:** Recapture `docs/assets/screenshot-2-popup.png` manually in real Chrome (1280x800 RGB PNG, whole browser window with toolbar visible, unlocked popup in `"Job posting found"` showing `"Unlocked for this session · Lock now"` footer) and commit/re-run `npm test` + `npm run package` if committed assets change.
-3. **Release PR & remote CI:** Open the PR for `feat/public-release` (stacked on PR #4's head branch if PR #4 is still open, or targeting the merged base) and confirm remote CI passes.
+3. **Release PR & remote CI:** PR #5 is open against `main` (it carries PR #4's commit until #4 merges). Confirm CI passes after `fa35c09`; Auto-fix reports failures to the lead session.
 4. **Final PM closeout & store submission:** PM drafted the release retro in chat, not yet written to disk pending confirmation of the team directory below; save the retro and complete final v2.0.0 release closeout after real-Chrome evidence and CI pass. User handles Chrome Web Store developer submission.
 
 ## Open questions for the user
