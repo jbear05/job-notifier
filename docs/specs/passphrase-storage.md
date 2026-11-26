@@ -77,7 +77,7 @@ Add a `#vault` section (`class="section"`, keeping the two-column `220px minmax(
     - List:
       - **Encrypted in this Chrome profile.** Your passphrase encrypts your Anthropic API key and friends list on disk.
       - **No recovery.** Job Notifier has no server and cannot recover a forgotten passphrase. If you forget it, you will have to erase saved data and start over.
-      - **Unlocked per Chrome session.** Once unlocked, your data stays unlocked until you click **Lock now** or close Chrome.
+      - **Unlocked per Chrome session.** Once unlocked, your data stays unlocked until you click **Lock now** or quit Chrome completely.
   - **Field 1:** Label `Passphrase` (`#setup-passphrase`, `type="password"`, `autocomplete="off"`, `spellcheck="false"`, `aria-describedby="setup-passphrase-help setup-passphrase-error"`).
     - Help (`#setup-passphrase-help`, `.small.muted`): `At least 8 characters. Job Notifier cannot recover a forgotten passphrase.`
     - Error (`#setup-passphrase-error`, `.small.error-text`): empty until invalid.
@@ -167,19 +167,19 @@ Applies during passphrase creation, P3 conversion, unlock, lock, or reset. Only 
 - **`#vault` section:**
   - Left column: `h2#vault-heading[tabindex="-1"]`: `Passphrase lock` | `p.small.muted`: `Unlocked for this Chrome session.`
   - Right column:
-    - `p`: `Your API key and friends list stay unlocked until you click Lock now or close Chrome.`
+    - `p`: `Your API key and friends list stay unlocked until you click Lock now or quit Chrome completely.`
     - `.actions`: Secondary button `Lock now` (`#lock-btn`), status `#vault-status` (`.small`, `role="status"`).
   - Clicking **Lock now** locks the session in the worker, clears `#api-key`, `#friend-form`, `#friend-list`, and in-memory `friends`/`pendingImport`, hides `#claude` and `#friends`, switches `#vault` to `locked`, focuses `#vault-heading` (`Unlock saved data`), and sets `#unlock-status` to `Locked. Your API key and friends were cleared from memory.`
   - Multi-tab sync: if another extension context locks, unlocks, or resets the vault, this page immediately synchronizes its UI and clears sensitive DOM/memory on lock.
 - **`#claude` section disclosure update:**
   - Replace the `"Stored unencrypted."` bullet in `.disclosure` with:
-    - `<strong>Encrypted with your passphrase.</strong> Your API key and friends list are encrypted in this Chrome profile and stay unlocked until you click Lock now or close Chrome. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a>`
+    - `<strong>Encrypted with your passphrase.</strong> Your API key and friends list are encrypted in this Chrome profile and stay unlocked until you click Lock now or quit Chrome completely. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a>`
   - Add to the `"Never sent:"` bullet: `Your passphrase never leaves this browser.`
 - **`#friends` section export update (P2):**
   - Keep `Export JSON` (`#export-btn`, available only while unlocked and list is non-empty).
   - Update `#export-note` (`.small.muted`) to: `Exports a readable, unencrypted JSON file of your friends list (including email addresses, excluding your API key). Anyone with this file can read it outside Chrome.`
 - **`#privacy` section update:**
-  - Paragraph 1: `Your API key, settings, and friends are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or close Chrome. Job postings you view are kept in memory until you close their tab or Chrome.`
+  - Paragraph 1: `Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or quit Chrome completely. Your model, match, and auto-detect preferences aren't encrypted. Job postings you view are kept in memory until you close their tab or quit Chrome completely.`
   - Paragraph 3: `To delete everything Job Notifier stored, use Forgot passphrase? to erase saved data or remove it from Chrome's Extensions page. To remove only your key, unlock settings, clear the key field, and save.`
 
 ### Popup (`popup.html`, `popup.css`, `popup.js`)
@@ -325,7 +325,7 @@ All cryptographic operations use Chrome's built-in Web Crypto API (`crypto.subtl
 
 - **Unlock lifetime:**
   - On valid unlock (or setup/conversion), `deriveBits` produces 32 raw key bytes. The worker imports a non-extractable working `CryptoKey` (`extractable: false`, `['encrypt', 'decrypt']`), authenticates/decrypts `vault` to verify the passphrase before marking the session unlocked, writes the 32-byte key as base64 to `chrome.storage.session` under `vaultKey`, and zeroes the temporary `Uint8Array` buffer.
-  - The passphrase itself is **never** written to `chrome.storage.session`, `chrome.storage.local`, `chrome.storage.sync`, logs, or messages.
+  - The passphrase travels only from settings to the manifest service worker through its direct message channel. It never enters browser storage, logs, or extension-wide messaging.
 - **Service worker restart (same Chrome session):**
   - `chrome.storage.session` persists across MV3 service worker idle restarts. On demand, the worker reads `vaultKey` from `chrome.storage.session`, imports it (`extractable: false`), and decrypts + authenticates `vault` from `chrome.storage.local`. No re-prompt is required.
 - **Browser restart / extension reload:**
@@ -341,7 +341,7 @@ Every worker listener checks `sender` before dispatching:
 
 | Context | Sender check | Allowed messages | Prohibited |
 |---|---|---|---|
-| **Settings (`options.html`)** | `isSettingsSender`: `sender.id === chrome.runtime.id`, `new URL(sender.url).origin === 'chrome-extension://' + chrome.runtime.id`, `pathname === '/options.html'`, `(sender.frameId === undefined \|\| sender.frameId === 0)` | `VAULT_STATUS`, `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_LOCK`, `VAULT_RESET`, `VAULT_GET_DATA`, `VAULT_SAVE_CLAUDE`, `VAULT_SAVE_FRIENDS`, `VAULT_CONVERT_LEGACY` | Never sends passphrase to storage or logs; `VAULT_GET_DATA` rejected when locked |
+| **Settings (`options.html`)** | Direct service-worker message from this extension's top-level settings `WindowClient`, with one reply port. `isSettingsSender` verifies the data-free `VAULT_LOCK` runtime message. | `VAULT_STATUS`, `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_LOCK`, `VAULT_RESET`, `VAULT_GET_DATA`, `VAULT_SAVE_CLAUDE`, `VAULT_SAVE_FRIENDS`, `VAULT_CONVERT_LEGACY` | Passphrase stays out of storage and logs. `VAULT_GET_DATA` is rejected when locked. |
 | **Popup (`popup.html`)** | `isStaticExtensionSender`: same origin check, `pathname === '/popup.html'`, `frameId === 0 \|\| undefined` | `POPUP_STATUS` (minimal state only), `VAULT_LOCK`, port `analyze` (`ANALYZE_JOB`) | `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_RESET`, `VAULT_GET_DATA`, `VAULT_SAVE_*`, `VAULT_CONVERT_LEGACY`; never reads `vault` or `vaultKey` directly |
 | **Overlay (`overlay.html`)** | `isExtensionPage` + `isOverlayFrame` + `ownsPrompt` (browser-assigned `frameId` & `documentId`) | `OVERLAY_STATE`, `OVERLAY_READY`, `OVERLAY_CLOSE`, port `analyze` (`ANALYZE_TAB`) | All `VAULT_*` messages; never reads `chrome.storage` |
 | **Content script (`content.js`)** | `isValidContentMessage` (`sender.tab`, `frameId === 0`, `http(s):` URL, capped strings) | `JOB_SEEN`, `CONFIRMATION_SEEN`, `OVERLAY_DISMISSED` | All `VAULT_*` messages, all `analyze` ports, all `chrome.storage` access |
@@ -357,7 +357,7 @@ All vault reads/writes execute sequentially through a single worker promise queu
 
 1. **Lock during Unlock:** `VAULT_LOCK` increments `vaultEpoch` **synchronously** upon receipt (before awaiting the queue), clears in-memory state, and queues `chrome.storage.session.remove('vaultKey')`. `VAULT_UNLOCK` captures `startEpoch = vaultEpoch` before PBKDF2 and verifies `startEpoch === vaultEpoch` after `deriveBits` and decryption complete. If `vaultEpoch` changed, `VAULT_UNLOCK` discards the key, does **not** write `vaultKey`, and replies `{ ok: false, code: 'LOCKED' }`.
 2. **Lock during Save:** `VAULT_SAVE_*` checks lock state and `vaultEpoch` inside `inVault` before writing. If already locked, it aborts with `{ ok: false, code: 'LOCKED' }` without touching `chrome.storage.local.vault`. If encryption or `chrome.storage.local.set` fails, `vault` in `chrome.storage.local` is never overwritten and the last confirmed ciphertext remains readable.
-3. **Lock during Analysis:** `analyze` snapshots `{ apiKey, friends, settings }` and `analysisEpoch = vaultEpoch` inside `inVault`. An `AbortController` registered for the request is aborted immediately on `VAULT_LOCK`. Before `fetch` and again before returning/posting results on the `analyze` port, the worker verifies `analysisEpoch === vaultEpoch`; if locked, it discards the response and returns `{ ok: false, code: 'LOCKED' }`. UI surfaces receiving `VAULT_LOCKED` or `code === 'LOCKED'` discard in-flight or late results without rendering them.
+3. **Lock during Analysis:** The worker captures `analysisEpoch` when it receives an authenticated analysis request. It checks the epoch after overlay prompt lookup, before the `inVault` credential snapshot, before `fetch`, and before posting results. `VAULT_LOCK` aborts registered requests. A changed epoch ends the old request with `{ ok: false, code: 'LOCKED' }`, including when the user has already started a new unlocked session. UI surfaces receiving `VAULT_LOCKED` or `code === 'LOCKED'` discard in-flight or late results.
 4. **Concurrent edits from two settings pages:** `VAULT_GET_DATA` returns a `vaultRev` token (hash/counter of the current `vault` record). `VAULT_SAVE_*` requires `expectedRev`. If another settings tab saved or reset `vault` first, `expectedRev !== currentRev` rejects the stale write with `{ ok: false, code: 'STALE_EDIT' }`, preserving the newer ciphertext. Successful saves/setups/resets broadcast `VAULT_CHANGED` so other open `options.html` tabs reload fresh state.
 
 ### P2: Readable JSON export rules
@@ -475,3 +475,7 @@ All vault reads/writes execute sequentially through a single worker promise queu
   - The worker doesn't enforce one message per port. options.js disconnects after one reply.
 - **For qa's pre-check:** V1 (the lock race) and the settings flows in a real Chrome: setup, unlock, save, P3 conversion and reset over the port. Also confirm that no "Unchecked runtime.lastError" appears when the worker restarts mid-request.
 - **Next owner:** reviewer and security.
+
+**Lead, vault-fix review (2026-11-26, at `87e56bd`):** Reviewer and security **FAIL**. Chrome extension runtime ports may have multiple receivers, so the named `vault` port does not enforce worker-only delivery. Security also found that an overlay click could survive a Lock and re-unlock while its prompt lookup was pending. Designer **PASS** for the settings copy and refreshed 1280×800 store capture. Verified the setup and unlocked settings at 375, 800, and 1280 pixels where applicable. The lead corrected the storage retention descriptions in the README and listing. [Chrome port lifetime](https://developer.chrome.com/docs/extensions/develop/concepts/messaging#port-lifetime)
+
+**QA, direct messaging red gate:** `node --test --test-name-pattern 'security Low [12]' --test-reporter=spec test/vault.test.js test/options.test.js` ran before runtime changes. Six expected failures and two passes. The failed checks covered the stale overlay click, missing direct worker handler, remaining broad runtime port, and settings flows that needed the new channel. Next owner: engineer for direct `ServiceWorker.postMessage()` with a private reply port and lock-epoch validation at analysis request receipt.

@@ -211,22 +211,49 @@ function validatePassphrasePair(passId, confirmId) {
   return pass;
 }
 
-// Vault messages carry the passphrase, key, or friends, and runtime.sendMessage would also
-// reach the popup and overlays, so each goes on its own worker-only 'vault' port (security
-// Low 2). A disconnect before the reply counts as no reply. VAULT_LOCK carries nothing.
+const WORKER_UNAVAILABLE = {
+  ok: false,
+  code: 'WORKER_UNAVAILABLE',
+  error: 'Job Notifier did not receive a reply. Reload settings to check the current state.',
+};
+
+async function getVaultWorker() {
+  let timer;
+  try {
+    const registration = await Promise.race([
+      navigator.serviceWorker?.ready,
+      new Promise(resolve => { timer = setTimeout(resolve, 5000); }),
+    ]);
+    return registration?.active;
+  } catch (e) {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Send vault data directly to the manifest worker, with a separate reply
+// channel for each request. VAULT_LOCK carries no sensitive data.
 async function sendWorker(msg) {
   if (msg.type === 'VAULT_LOCK') return chrome.runtime.sendMessage(msg);
+  const worker = await getVaultWorker();
+  if (worker?.scriptURL !== chrome.runtime.getURL('background.js')) return WORKER_UNAVAILABLE;
   return new Promise(resolve => {
-    const port = chrome.runtime.connect({ name: 'vault' });
-    port.onMessage.addListener(reply => {
-      resolve(reply);
-      port.disconnect();
-    });
-    port.onDisconnect.addListener(() => {
-      void chrome.runtime.lastError;
-      resolve(undefined);
-    });
-    port.postMessage(msg);
+    const { port1, port2 } = new MessageChannel();
+    const finish = reply => {
+      clearTimeout(timer);
+      port1.close();
+      resolve(reply ?? WORKER_UNAVAILABLE);
+    };
+    const timer = setTimeout(finish, 10000);
+    port1.onmessage = event => finish(event.data);
+    port1.onmessageerror = () => finish();
+    try {
+      worker.postMessage(msg, [port2]);
+    } catch (e) {
+      port2.close();
+      finish();
+    }
   });
 }
 
@@ -235,6 +262,10 @@ async function loadUnlockedData() {
   if (currentVaultState !== 'unlocked') return false;
   if (!res || !res.ok) {
     if (res?.code === 'LOCKED') await loadVault({ focus: false });
+    else if (res?.code === 'WORKER_UNAVAILABLE') {
+      renderVaultState('locked');
+      say('unlock-status', res.error, true);
+    }
     else if (res?.vaultState) renderVaultState(res.vaultState);
     return false;
   }
@@ -324,6 +355,7 @@ async function submitConvert(e) {
     return;
   }
   if (res?.code === 'LOCKED') return loadVault({ focus: true });
+  if (res?.code === 'WORKER_UNAVAILABLE') return say('convert-error', res.error, true);
   $('convert-error-block').hidden = false;
   $('convert-error-heading').focus();
 }
@@ -365,7 +397,8 @@ async function submitUnlock(e) {
     return;
   }
   if (res?.code === 'LOCKED') return loadVault({ focus: true });
-  setError('unlock-passphrase', 'Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.');
+  if (res?.code === 'WORKER_UNAVAILABLE') say('unlock-status', res.error, true);
+  else setError('unlock-passphrase', 'Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.');
   $('unlock-passphrase').focus();
 }
 
@@ -724,6 +757,7 @@ async function loadVault({ focus = false } = {}) {
   const status = await sendWorker({ type: 'VAULT_STATUS' }).catch(() => null);
   const state = status?.vaultState || 'locked';
   renderVaultState(state, { summary: status?.legacySummary, focus });
+  if (status?.code === 'WORKER_UNAVAILABLE') say('unlock-status', status.error, true);
   if (state === 'unlocked') await loadUnlockedData();
 }
 

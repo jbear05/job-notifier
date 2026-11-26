@@ -43,11 +43,8 @@ const POSTING = 'Responsibilities and qualifications. Salary and benefits. Full-
 const nextTask = () => new Promise(resolve => setImmediate(resolve));
 const settle = async () => { for (let i = 0; i < 40; i++) await nextTask(); };
 
-// Security Low 2 contract: the settings page's vault messages go only over this port.
-const VAULT_PORT = 'vault';
-const VAULT_PORT_TYPES = new Set(['VAULT_STATUS', 'VAULT_SETUP', 'VAULT_UNLOCK', 'VAULT_RESET', 'VAULT_GET_DATA', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_CONVERT_LEGACY']);
-// The ones that carry the passphrase, the API key, or friends in the request or the reply.
-const SECRET_TYPES = ['VAULT_SETUP', 'VAULT_UNLOCK', 'VAULT_CONVERT_LEGACY', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_GET_DATA'];
+// Security Low 2: options sends these directly to the extension service worker.
+const VAULT_TYPES = new Set(['VAULT_STATUS', 'VAULT_SETUP', 'VAULT_UNLOCK', 'VAULT_RESET', 'VAULT_GET_DATA', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_CONVERT_LEGACY']);
 const copy = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const read = rel => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
@@ -96,6 +93,7 @@ function loadWorker({
   const local = storageArea(localInitial);
   const session = storageArea(sessionInitial);
   const broadcasts = [];
+  const workerMessages = event();
   const chrome = {
     storage: { local, session, onChanged: event() },
     permissions: { contains: async () => true, request: async () => true, remove: async () => true, onAdded: event(), onRemoved: event() },
@@ -115,6 +113,9 @@ function loadWorker({
   };
   const ctx = {
     chrome,
+    self: { addEventListener(type, fn) {
+      if (type === 'message') workerMessages.addListener(fn);
+    } },
     crypto: globalThis.crypto,
     URL,
     TextEncoder,
@@ -141,13 +142,12 @@ function loadWorker({
     if (!kept.includes(true) && !replied) resolve(undefined);
   });
 
-  // Security Low 2: options.js sends vault settings messages on a one-request 'vault' port that only the
-  // worker handles. Resolves with the worker's reply, or undefined if the worker disconnects without one.
+  // The old extension-wide port, exercised to verify that it declines vault requests.
   const sendOnVaultPort = (msg, sender) => new Promise(resolve => {
     let done = false;
     const finish = value => { if (!done) { done = true; resolve(value); } };
     const port = {
-      name: VAULT_PORT, sender, onMessage: event(), onDisconnect: event(),
+      name: 'vault', sender, onMessage: event(), onDisconnect: event(),
       postMessage: reply => finish(copy(reply)),
       disconnect: () => finish(undefined),
     };
@@ -156,8 +156,26 @@ function loadWorker({
     setTimeout(() => finish('no reply within 5 s'), 5000).unref();
   });
 
-  // Each message travels the way the extension sends it: vault settings messages on the port, the rest by sendMessage.
-  const send = (msg, sender) => (VAULT_PORT_TYPES.has(msg?.type) ? sendOnVaultPort : sendMessageOnly)(msg, sender);
+  const directVault = async (data, source, portCount = 1) => {
+    const replies = [];
+    const tasks = [];
+    const ports = Array.from({ length: portCount }, (_, index) => ({
+      postMessage: reply => replies.push({ index, reply: copy(reply) }),
+      close() {},
+    }));
+    const origin = source?.url?.match(/^\w[\w-]*:\/\/[^/]+/)?.[0] || '';
+    workerMessages.fire({ data, source, origin, ports, waitUntil: task => tasks.push(task) });
+    await Promise.all(tasks);
+    if (ports.length !== 1) assert.deepEqual(replies, [], 'invalid port counts get no reply on any port');
+    assert.ok(replies.length <= 1, 'one request gets at most one reply');
+    return replies[0]?.reply;
+  };
+
+  const send = (msg, sender) => {
+    if (!VAULT_TYPES.has(msg?.type)) return sendMessageOnly(msg, sender);
+    const url = sender.id === RID ? sender.url : sender.url?.replace(`chrome-extension://${RID}/`, 'chrome-extension://other-extension/');
+    return directVault(msg, windowClient({ url, frameType: sender.frameId ? 'nested' : 'top-level' }));
+  };
 
   const connectAnalyze = (msg, sender) => new Promise(resolve => {
     let settledPort = false;
@@ -183,10 +201,11 @@ function loadWorker({
     if (!settledPort) port.onMessage.fire(msg);
   });
 
-  return { chrome, local, session, broadcasts, send, sendMessageOnly, sendOnVaultPort, connectAnalyze };
+  return { chrome, local, session, broadcasts, send, sendMessageOnly, sendOnVaultPort, directVault, connectAnalyze };
 }
 
 const optionsSender = (extra = {}) => ({ id: RID, url: `chrome-extension://${RID}/options.html`, frameId: 0, ...extra });
+const windowClient = (extra = {}) => ({ id: 'window-client-id', type: 'window', frameType: 'top-level', url: `chrome-extension://${RID}/options.html`, ...extra });
 const popupSender = (extra = {}) => ({ id: RID, url: `chrome-extension://${RID}/popup.html`, ...extra });
 const overlaySender = (tabId, url, docId = 'doc-overlay-1') => ({
   id: RID,
@@ -958,39 +977,96 @@ test('security Low 1: a Lock sent right after Find friends in the overlay (ANALY
   assert.equal(fetches, 0, 'no request after the lock');
 });
 
-test('security Low 2: the worker handles vault settings messages only on its "vault" port, behind isSettingsSender', async () => {
+test('security Low 1: a lock and unlock during overlay prompt lookup do not revive the original analysis', { timeout: 3000 }, async () => {
+  let fetches = 0;
+  const w = loadWorker({ ...(await unlockedFixture({ autoDetect: true })), fetch: async () => { fetches++; return okApiResponse([0]); } });
+  const url = 'https://ats.example/8';
+  const sender = overlaySender(8, url);
+  await w.send({ type: 'JOB_SEEN', text: POSTING, title: 'Role' }, contentSender(8, 'https://jobs.example/8'));
+  assert.equal((await w.send({ type: 'CONFIRMATION_SEEN' }, contentSender(8, url)))?.show, true);
+  assert.equal((await w.send({ type: 'OVERLAY_STATE' }, sender))?.state, 'prompt');
+
+  let markPromptLookup;
+  let releasePromptLookup;
+  const lookupStarted = new Promise(resolve => { markPromptLookup = resolve; });
+  const lookupGate = new Promise(resolve => { releasePromptLookup = resolve; });
+  w.chrome.tabs.sendMessage = async (_tabId, msg) => {
+    if (msg.type !== 'DOCUMENT_PING') return undefined;
+    markPromptLookup();
+    await lookupGate;
+    return { ok: true };
+  };
+
+  const analyzing = w.connectAnalyze({ type: 'ANALYZE_TAB' }, sender);
+  await lookupStarted;
+  try {
+    assert.equal((await w.send({ type: 'VAULT_LOCK' }, optionsSender()))?.vaultState, 'locked');
+    assert.equal((await w.send({ type: 'VAULT_UNLOCK', passphrase: PASS_1 }, optionsSender()))?.vaultState, 'unlocked');
+  } finally {
+    releasePromptLookup();
+  }
+  assert.deepEqual(await analyzing, { ok: false, code: 'LOCKED' });
+  assert.equal(fetches, 0, 'the pre-lock click never makes a request');
+  assert.equal((await w.connectAnalyze({ type: 'ANALYZE_TAB' }, sender))?.ok, true, 'a fresh click works after unlocking');
+  assert.equal(fetches, 1);
+});
+
+test('security Low 2: only a top-level extension settings WindowClient and one reply port can access the vault', async () => {
   const w = loadWorker();
-  assert.deepEqual(await w.sendOnVaultPort({ type: 'VAULT_STATUS' }, optionsSender()), { ok: true, vaultState: 'uninitialized' });
-  assert.equal((await w.sendOnVaultPort({ type: 'VAULT_SETUP', passphrase: PASS_1 }, optionsSender()))?.ok, true);
-  const d = await w.sendOnVaultPort({ type: 'VAULT_GET_DATA' }, optionsSender());
-  assert.equal(d?.ok, true, 'the settings page reads the vault over the port');
-  const saved = await w.sendOnVaultPort({ type: 'VAULT_SAVE_CLAUDE', apiKey: SAMPLE_KEY, model: 'claude-haiku-5-5', effort: 'low', threshold: 0.6, expectedRev: d?.vaultRev }, optionsSender());
-  assert.equal(saved?.ok, true, 'and saves over it');
+  const settings = windowClient();
+  assert.deepEqual(await w.directVault({ type: 'VAULT_STATUS' }, settings), { ok: true, vaultState: 'uninitialized' }, 'the worker responds on the transferred MessagePort');
+  assert.equal((await w.directVault({ type: 'VAULT_SETUP', passphrase: PASS_1 }, settings))?.ok, true);
+  const d = await w.directVault({ type: 'VAULT_GET_DATA' }, settings);
+  assert.equal(d?.ok, true, 'the options document reads the vault directly');
+  const saved = await w.directVault({ type: 'VAULT_SAVE_CLAUDE', apiKey: SAMPLE_KEY, model: 'claude-haiku-5-5', effort: 'low', threshold: 0.6, expectedRev: d?.vaultRev }, settings);
+  assert.equal(saved?.ok, true, 'and saves directly');
+  const friendSave = await w.directVault({ type: 'VAULT_SAVE_FRIENDS', friends: SAMPLE_FRIENDS, expectedRev: saved?.vaultRev }, settings);
+  assert.equal(friendSave?.ok, true);
+  const directData = await w.directVault({ type: 'VAULT_GET_DATA' }, windowClient({ url: settings.url + '#friends' }));
+  assert.equal(directData?.apiKey, SAMPLE_KEY, 'the documented friends anchor still addresses the options page');
+  assert.deepEqual(directData?.friends, SAMPLE_FRIENDS, 'only the reply port receives the vault data');
   const before = copy(w.local.data.vault);
 
-  // The isSettingsSender gate applies to the port's sender.
-  for (const s of [
-    popupSender(), overlaySender(2, 'https://ats.example/done'), contentSender(2, 'https://ats.example/done'),
-    optionsSender({ frameId: 1 }), { id: 'other-ext', url: `chrome-extension://${RID}/options.html`, frameId: 0 },
+  for (const [label, source] of [
+    ['popup', windowClient({ url: popupSender().url })],
+    ['overlay frame', windowClient({ url: overlaySender(2, 'https://ats.example/done').url, frameType: 'nested' })],
+    ['web page', windowClient({ url: 'https://ats.example/options.html' })],
+    ['nested settings frame', windowClient({ frameType: 'nested' })],
+    ['same path in another extension', windowClient({ url: 'chrome-extension://other-extension/options.html' })],
+    ['different path', windowClient({ url: `chrome-extension://${RID}/another/options.html` })],
+    ['non-window client', windowClient({ type: 'worker' })],
+    ['missing source', null],
   ]) {
-    for (const msg of [{ type: 'VAULT_GET_DATA' }, { type: 'VAULT_UNLOCK', passphrase: PASS_1 }, { type: 'VAULT_SAVE_FRIENDS', friends: [], expectedRev: saved?.vaultRev }]) {
-      const reply = await w.sendOnVaultPort(msg, s);
-      assert.ok(!reply || reply.ok === false, `${msg.type} on the port from ${s.url || s.id} (frame ${s.frameId}) is refused`);
-      assert.ok(!JSON.stringify(reply ?? '').includes(SAMPLE_KEY), 'and returns no key');
+    for (const msg of [{ type: 'VAULT_GET_DATA' }, { type: 'VAULT_UNLOCK', passphrase: PASS_1 }, { type: 'VAULT_SAVE_FRIENDS', friends: [], expectedRev: friendSave?.vaultRev }]) {
+      assert.equal(await w.directVault(msg, source), undefined, `${msg.type} from ${label} gets no reply`);
     }
   }
-  assert.deepEqual(w.local.data.vault, before, 'refused port messages change nothing');
+  for (const count of [0, 2]) {
+    assert.equal(await w.directVault({ type: 'VAULT_SAVE_FRIENDS', friends: [], expectedRev: friendSave?.vaultRev }, settings, count), undefined);
+    assert.equal(await w.directVault({ type: 'VAULT_GET_DATA' }, settings, count), undefined);
+  }
+  assert.deepEqual(w.local.data.vault, before, 'refused settings messages change nothing');
+  for (const signal of w.broadcasts) {
+    for (const secret of [PASS_1, SAMPLE_KEY, SAMPLE_FRIENDS[0].name, SAMPLE_FRIENDS[0].contact]) {
+      assert.ok(!JSON.stringify(signal).includes(secret), 'vault broadcasts contain only status');
+    }
+  }
+});
 
-  // runtime.sendMessage also reaches other extension frames, so the worker ignores secrets sent that way (fail closed).
+test('security Low 2: extension messaging refuses vault secrets even from options.html', async () => {
+  const w = loadWorker(await unlockedFixture());
+  const before = copy(w.local.data.vault);
+  const current = await w.send({ type: 'VAULT_GET_DATA' }, optionsSender());
   for (const msg of [
     { type: 'VAULT_SETUP', passphrase: PASS_2 },
     { type: 'VAULT_UNLOCK', passphrase: PASS_1 },
     { type: 'VAULT_CONVERT_LEGACY', passphrase: PASS_2 },
-    { type: 'VAULT_SAVE_CLAUDE', apiKey: SAMPLE_KEY, model: 'claude-haiku-5-5', effort: 'low', threshold: 0.6, expectedRev: saved?.vaultRev },
-    { type: 'VAULT_SAVE_FRIENDS', friends: SAMPLE_FRIENDS, expectedRev: saved?.vaultRev },
+    { type: 'VAULT_SAVE_CLAUDE', apiKey: SAMPLE_KEY, model: 'claude-haiku-5-5', effort: 'low', threshold: 0.6, expectedRev: current?.vaultRev },
+    { type: 'VAULT_SAVE_FRIENDS', friends: [], expectedRev: current?.vaultRev },
     { type: 'VAULT_GET_DATA' },
   ]) {
-    assert.equal(await w.sendMessageOnly(msg, optionsSender()), undefined, `${msg.type} over runtime.sendMessage gets no reply, even from the settings page`);
+    assert.equal(await w.sendMessageOnly(msg, optionsSender()), undefined, `${msg.type} over runtime.sendMessage gets no reply`);
+    assert.equal(await w.sendOnVaultPort(msg, optionsSender()), undefined, `${msg.type} over runtime.connect gets no reply`);
   }
   assert.deepEqual(w.local.data.vault, before, 'and changes nothing');
   assert.equal((await w.sendMessageOnly({ type: 'VAULT_LOCK' }, optionsSender()))?.ok, true, 'VAULT_LOCK carries nothing and stays on sendMessage');

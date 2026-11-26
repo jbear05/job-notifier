@@ -97,7 +97,7 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 |---|---|
 | `activeTab` | Reads the posting on the tab where you clicked the toolbar button, and only that tab. |
 | `scripting` | Runs the page-reading script on that tab, and registers the auto-detect script when you turn auto-detect on. |
-| `storage` | Saves your encrypted key and friends plus settings in this browser, and the session unlock key and postings you view in memory until you lock or quit Chrome completely. |
+| `storage` | Saves your encrypted API key and friends list and your preferences in this browser. The session key stays in memory until you lock or quit Chrome completely. Each viewed posting stays in memory until you close its tab or quit Chrome completely. |
 | `clipboardWrite` | Lets **Copy** and **Copy all** put drafts on your clipboard. |
 | `https://api.anthropic.com/*` | Sends the analysis request to Anthropic's API with your key. It's the only server Job Notifier contacts. |
 | `https://*/*` and `http://*/*` (optional) | Requested only when you turn on auto-detect, to spot postings and confirmations on job sites. Removed when you turn it off. |

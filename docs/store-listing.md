@@ -101,7 +101,7 @@ Used with activeTab to run the function that reads the visible text of the tab t
 
 **storage**
 ```text
-Saves the user's passphrase-encrypted Anthropic API key and friends list plus non-sensitive preferences in chrome.storage.local on their device, and keeps the session unlock key (while unlocked) and job postings the user views (with auto-detect on) in chrome.storage.session, which is memory only until the user clicks Lock now or quits Chrome completely. Nothing is synced or sent to a developer server.
+Saves the user's passphrase-encrypted Anthropic API key and friends list and non-sensitive preferences in chrome.storage.local. The session unlock key stays in memory until the user clicks Lock now or quits Chrome completely. With auto-detect on, a viewed posting stays in memory until the user closes that tab or quits Chrome completely. Nothing is synced or sent to a developer server.
 ```
 
 **clipboardWrite**

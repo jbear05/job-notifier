@@ -64,6 +64,7 @@ function loadWorker({ fetch = async () => { throw new Error('no network in tests
     friends: [{ name: 'Sam', contact: 'sam@example.com', skills: ['Go'] }],
   });
   const session = storageArea();
+  const workerMessages = event();
   const chrome = {
     storage: { local, session, onChanged: event() },
     permissions: { contains: async () => true, request: async () => true, remove: async () => true, onAdded: event(), onRemoved: event() },
@@ -84,6 +85,7 @@ function loadWorker({ fetch = async () => { throw new Error('no network in tests
   const ctx = {
     chrome, crypto: globalThis.crypto, URL, TextEncoder, TextDecoder, Uint8Array, btoa, atob,
     AbortController, AbortSignal: abortSignal, setTimeout, clearTimeout, fetch,
+    self: { addEventListener(type, fn) { if (type === 'message') workerMessages.addListener(fn); } },
   };
   vm.createContext(ctx);
   ctx.importScripts = (...files) => {
@@ -92,22 +94,26 @@ function loadWorker({ fetch = async () => { throw new Error('no network in tests
   ctx.importScripts('background.js');
 
   // chrome.runtime.sendMessage as seen by the worker: resolves with its reply, or undefined if unhandled.
-  const sendMessage = (msg, sender) => new Promise(resolve => {
+  const send = (msg, sender) => new Promise(resolve => {
     let replied = false;
     const kept = chrome.runtime.onMessage.fire(msg, sender, reply => { replied = true; resolve(reply); });
     if (!kept.includes(true) && !replied) resolve(undefined);
   });
-  // Security Low 2: the settings page's vault messages travel on a one-request 'vault' port (see vault.test.js).
-  const sendOnVaultPort = (msg, sender) => new Promise(resolve => {
-    let done = false;
-    const finish = value => { if (!done) { done = true; resolve(value); } };
-    const port = { name: 'vault', sender, onMessage: event(), onDisconnect: event(), postMessage: finish, disconnect: () => finish(undefined) };
-    chrome.runtime.onConnect.fire(port);
-    if (!done) port.onMessage.fire(msg);
-    setTimeout(() => finish('no reply within 5 s'), 5000).unref();
-  });
-  const send = (msg, sender) => (/^VAULT_(?!LOCK$)/.test(msg?.type || '') ? sendOnVaultPort : sendMessage)(msg, sender);
-  return { chrome, session, send };
+  // A direct options Page-to-worker request with one transferred reply endpoint.
+  const sendVault = async data => {
+    const origin = `chrome-extension://${RID}`;
+    const tasks = [];
+    let reply;
+    workerMessages.fire({
+      data, origin,
+      source: { id: 'settings-test-client', type: 'window', frameType: 'top-level', url: `${origin}/options.html` },
+      ports: [{ postMessage: value => { reply = value; }, close() {} }],
+      waitUntil: task => tasks.push(task),
+    });
+    await Promise.all(tasks);
+    return reply;
+  };
+  return { chrome, session, send, sendVault };
 }
 
 const documentIds = new Map();
@@ -441,27 +447,26 @@ test('review 2 privacy: the stored posting site is the hostname without a non-de
 test('review 2 timeout: the worker reports a fetch timeout before Chrome’s 30-second limit', async () => {
   const signal = AbortSignal.abort(new DOMException('Test deadline reached', 'TimeoutError'));
   let deadline;
-  const { chrome, send } = loadWorker({
+  const { chrome, sendVault } = loadWorker({
     abortSignal: { timeout: ms => { deadline = ms; return signal; } },
     fetch: async (_url, options) => { throw options.signal.reason; },
   });
-  const optSender = { id: RID, url: `chrome-extension://${RID}/options.html`, frameId: 0 };
-  const setup = await send({ type: 'VAULT_SETUP', passphrase: 'test-passphrase-value' }, optSender);
+  const setup = await sendVault({ type: 'VAULT_SETUP', passphrase: 'test-passphrase-value' });
   assert.equal(setup?.ok, true);
-  const claude = await send({
+  const claude = await sendVault({
     type: 'VAULT_SAVE_CLAUDE',
     apiKey: 'sk-ant-test',
     model: 'claude-haiku-5-5',
     effort: 'low',
     threshold: 0.6,
     expectedRev: setup.vaultRev,
-  }, optSender);
+  });
   assert.equal(claude?.ok, true);
-  const friends = await send({
+  const friends = await sendVault({
     type: 'VAULT_SAVE_FRIENDS',
     friends: [{ name: 'Sam', contact: 'sam@example.com', skills: ['Go'] }],
     expectedRev: claude.vaultRev,
-  }, optSender);
+  });
   assert.equal(friends?.ok, true);
 
   const response = new Promise(resolve => {

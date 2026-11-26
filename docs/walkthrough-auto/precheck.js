@@ -51,6 +51,8 @@ const ALL = ['https://*/*', 'http://*/*'];
 const ERROR_RED = 'rgb(180, 35, 24)';
 const PAYLOAD = '<img src=x onerror=alert(1)>';
 const LINKEDIN = 'https://www.linkedin.com/in/example-recruiter';
+// Vault messages that carry the passphrase, key, or friends go directly to the service worker.
+const SECRET_TYPES = ['VAULT_SETUP', 'VAULT_UNLOCK', 'VAULT_CONVERT_LEGACY', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_GET_DATA'];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const J = JSON.stringify;
@@ -82,6 +84,7 @@ const STEPS = [
   ['13.1', 0, 'Screenshot 2: set up the state'], ['13.2', 0, 'Screenshot 2: snip the window'], ['13.3', 0, 'Screenshot 2: convert and npm test'],
   ['X1', 0, 'Extra: content-script negatives (32a)'], ['X2', 0, 'Extra: API error mapping (9, 25)'], ['X3', 0, 'Extra: what the request carries (15)'],
   ['X4', 0, 'Extra: closing a tab clears its posting'], ['X5', 0, 'Extra: no errors logged during the run'],
+  ['X6', 0, 'Extra: vault messages use the worker-only port (security Low 2)'],
   // Security's real-Chrome checks from its vault review (docs/specs/passphrase-storage.md handoff log, 2026-11-26).
   ['V1', 1, 'Vault #1: a content script can\'t read the session key or see it change'], ['V2', 0, 'Vault #2: password-manager prompts'],
   ['V3', 1, 'Vault #3: a relaunch without re-adding the extension stays locked'], ['V4', 0, 'Vault #4: windows closed while Chrome keeps running'],
@@ -288,6 +291,8 @@ class Run {
         if (m.sessionId && p.targetInfo.type === 'iframe') {
           this.frames.set(p.sessionId, { parent: m.sessionId, url: p.targetInfo.url, targetId: p.targetInfo.targetId });
           this.b.send('Page.enable', {}, p.sessionId).catch(() => {});
+          this.b.send('Runtime.enable', {}, p.sessionId).catch(() => {}); // the overlay's console, for X5
+          this.b.send('Log.enable', {}, p.sessionId).catch(() => {});
           this.b.send('Emulation.setFocusEmulationEnabled', { enabled: true }, p.sessionId).catch(() => {});
         }
         break;
@@ -446,6 +451,7 @@ class Run {
     if (page) {
       await S.send('Page.enable').catch(() => {});
       await S.send('Runtime.enable').catch(() => {});
+      await S.send('Log.enable').catch(() => {});
       await S.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
       await S.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
     }
@@ -501,8 +507,23 @@ class Run {
     this.swSessions.add(S.sessionId);
     await S.send('Runtime.enable').catch(() => {});
     await S.send('Network.enable').catch(() => {});
+    // X6 records message types only. It never logs the values sent by settings.
+    await S.raw(`globalThis.__jnChannels || (globalThis.__jnChannels = true,
+      chrome.runtime.onMessage.addListener((m, s) => { console.debug('JNCHAN sendMessage', m && m.type, s.url); }),
+      chrome.runtime.onConnect.addListener(p => p.onMessage.addListener(m => console.debug('JNCHAN port:' + p.name, m && m.type, p.sender.url))),
+      self.addEventListener('message', e => { console.debug('JNCHAN service-worker', e.data?.type, e.source?.url); }))`).catch(() => {});
     this.swSession = S;
     return S;
+  }
+
+  // X6: vault message types seen per channel, from the worker-side log above.
+  channels() {
+    const lines = this.logs.filter(l => this.swSessions.has(l.session) && /^JNCHAN /.test(l.text)).map(l => l.text.split(' '));
+    const settings = lines.filter(([, , , url]) => /^chrome-extension:\/\/[^/]+\/options\.html(?:[?#]|$)/.test(url || ''));
+    return {
+      extensionMessages: settings.filter(([, channel]) => channel !== 'service-worker').map(([, , type]) => type),
+      directMessages: settings.filter(([, channel]) => channel === 'service-worker').map(([, , type]) => type),
+    };
   }
 
   async swv(expr) { return (await this.sw()).raw(`(async () => (${expr}))()`); }
@@ -1348,6 +1369,17 @@ async function runA() {
     eq('X5', 'run A: errors Chrome recorded for the extension', info.runtimeErrors.map(e => `${e.message} (${e.contextUrl || e.source}, ${e.occurrences}x)`), []);
     const swErr = A.logs.filter(l => A.swSessions.has(l.session) && /error|exception/.test(l.level)).map(l => l.text);
     eq('X5', 'run A: worker console errors', swErr, []);
+    eq('X5', 'run A: "Unchecked runtime.lastError" or permissions-policy lines in any console (pages, frames, worker)',
+      A.logs.filter(l => /Unchecked runtime\.lastError|Permissions policy/i.test(l.text)).map(l => l.text), []);
+  });
+
+  await step('X6', async () => {
+    const { extensionMessages, directMessages } = A.channels();
+    eq('X6', 'run A: secret-carrying vault messages from settings over extension messaging', extensionMessages.filter(t => SECRET_TYPES.includes(t)), []);
+    const seen = new Set(directMessages);
+    eq('X6', 'run A: flows not seen at the service worker (setup 2.2, save 3.3/3.5, unlock 4.3, reset 12.2, P3 12.5)',
+      ['VAULT_SETUP', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_UNLOCK', 'VAULT_GET_DATA', 'VAULT_RESET', 'VAULT_CONVERT_LEGACY'].filter(t => !seen.has(t)), []);
+    note('X6', `run A: settings used extension messaging for ${J([...new Set(extensionMessages)])} and direct worker messages for ${J([...seen])}`);
   });
 
   report.dialogsA = A.dialogs;
@@ -1585,7 +1617,10 @@ async function runB() {
     check('7.1', ms < 3500, `prompt shown ${ms} ms after Submit application`);
     const lines = await updSince(n);
     report.pushState = lines;
-    check('7.1', !lines.some(l => l.includes('"status":"loading"')), `onUpdated for pushState: ${lines.join(' | ') || '(none)'}`);
+    // Chrome and Edge send status 'loading' for pushState too, so criterion 31 (amended) keys on the document
+    // instead; the step's "no loading" expectation is browser behavior, recorded here rather than checked.
+    note('7.1', `onUpdated for the pushState: ${lines.join(' | ') || '(none)'}`);
+    eq('7.1', "worker's prompt entry for the tab after the pushState", await B.swv(`((await chrome.storage.session.get('prompts')).prompts || {})[${tabId}] ? 'kept' : 'dropped'`), 'kept');
   });
 
   await step('7.2', async () => {
@@ -1596,7 +1631,7 @@ async function runB() {
     await sleep(1500);
     const lines = await updSince(n);
     report.pushStateHash = lines;
-    check('7.2', !lines.some(l => l.includes('"status":"loading"')), `onUpdated: ${lines.join(' | ') || '(none)'}`);
+    note('7.2', `onUpdated for the pushState and hash change: ${lines.join(' | ') || '(none)'}`);
     eq('7.2', 'prompt still showing', [await B.hasFrame(P), await O71.text('#state-heading')], [true, 'Find friends for this job?']);
     eq('7.2', "worker's prompt entry for the tab after the URL changes", await B.swv(`((await chrome.storage.session.get('prompts')).prompts || {})[${tabId}] ? 'kept' : 'dropped'`), 'kept');
     const m = B.mark();
@@ -1822,7 +1857,7 @@ async function runB() {
     await B.posting(P, tabId);
     const world = B.contentWorld(P);
     if (!check('V1', !!world, `content script world found: ${world ? world.name : 'none'}`)) return;
-    const read = await P.raw("chrome.storage.session.get('vaultKey').then(r => 'read: ' + JSON.stringify(r), e => 'refused: ' + e.message)", { contextId: world.id });
+    const read = await P.raw("chrome.storage.session.get('vaultKey').then(() => 'unexpectedly readable', e => 'refused: ' + e.message)", { contextId: world.id });
     check('V1', read.startsWith('refused'), `storage.session.get('vaultKey') from the content script: ${read}`);
     await P.raw("globalThis.__areas = []; chrome.storage.onChanged.addListener((c, area) => globalThis.__areas.push(area + ': ' + Object.keys(c).join(',')));"
       + " try { chrome.storage.session.onChanged.addListener(c => globalThis.__areas.push('session.onChanged: ' + Object.keys(c).join(','))); } catch (e) { globalThis.__areas.push('session.onChanged unavailable: ' + e.message); }"
@@ -1931,9 +1966,12 @@ async function runB() {
     await sleep(2200);
     const errorsAfter = (await B.info()).runtimeErrors.length;
     const src = new URL(await P.v("_q('iframe[title=\"Job Notifier\"]').src")).host;
-    note('10.3', `navigator.clipboard.writeText in the frame: ${J(await O.v('window.__clip'))}; frame allow="${await P.v("_q('iframe[title=\"Job Notifier\"]').allow")}";`
-      + ` allowsFeature('clipboard-write') in the frame: ${await O.v("document.featurePolicy ? document.featurePolicy.allowsFeature('clipboard-write') : 'n/a'")};`
-      + ` frame src host ${src === B.id ? 'is the extension ID' : 'is a dynamic ID'}, frame document origin host ${(await O.v('location.host')) === B.id ? 'is the extension ID' : 'is not the extension ID'}; extension errors added by this copy: ${errorsAfter - errorsBefore}`);
+    eq('10.3', 'Clipboard API in the frame (writeText), not the execCommand fallback', await O.v('window.__clip'), ['resolved']);
+    eq('10.3', "allowsFeature('clipboard-write') in the frame", await O.v("document.featurePolicy ? document.featurePolicy.allowsFeature('clipboard-write') : 'n/a'"), true);
+    eq('10.3', 'frame allow attribute', await P.v("_q('iframe[title=\"Job Notifier\"]').allow"), `clipboard-write ${B.origin}`);
+    eq('10.3', 'permissions-policy lines from the copy (console, extension errors)',
+      [B.logs.filter(l => /Permissions policy/i.test(l.text)).map(l => l.text), errorsAfter - errorsBefore], [[], 0]);
+    note('10.3', `frame src host ${src === B.id ? 'is the extension ID' : 'is a dynamic ID'}; frame document origin host ${(await O.v('location.host')) === B.id ? 'is the extension ID' : 'is not the extension ID'}`);
     await O.js("navigator.clipboard.writeText = () => Promise.reject(new Error('blocked')); document.execCommand = () => false; return true;");
     await O.click(copy);
     await sleep(200);
@@ -2023,6 +2061,14 @@ async function runB() {
     eq('X5', 'run B: errors Chrome recorded for the extension', info.runtimeErrors.map(e => `${e.message} (${e.contextUrl || e.source}, ${e.occurrences}x)`), []);
     const swErr = B.logs.filter(l => B.swSessions.has(l.session) && /error|exception/.test(l.level)).map(l => l.text);
     eq('X5', 'run B: worker console errors', swErr, []);
+    eq('X5', 'run B: "Unchecked runtime.lastError" or permissions-policy lines in any console (pages, frames, worker)',
+      B.logs.filter(l => /Unchecked runtime\.lastError|Permissions policy/i.test(l.text)).map(l => l.text), []);
+  });
+
+  await step('X6', async () => {
+    const { extensionMessages, directMessages } = B.channels();
+    eq('X6', 'run B: secret-carrying vault messages from settings over extension messaging', extensionMessages.filter(t => SECRET_TYPES.includes(t)), []);
+    note('X6', `run B: settings used extension messaging for ${J([...new Set(extensionMessages)])} and direct worker messages for ${J([...new Set(directMessages)])}`);
   });
 
   // V7 needs the live session key, so read it before Chrome exits and its LevelDB files are final.

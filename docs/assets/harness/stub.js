@@ -60,6 +60,22 @@
 
   const event = () => ({ addListener() {}, removeListener() {} });
   const pick = keys => Object.fromEntries([].concat(keys).filter(k => k in store).map(k => [k, structuredClone(store[k])]));
+  const vaultReply = msg => {
+    const vs = vaultStateFor();
+    if (msg?.type === 'VAULT_STATUS') {
+      return vs === 'needs-conversion'
+        ? { ok: true, vaultState: vs, legacySummary: { hasKey: true, friendCount: FRIENDS.length } }
+        : { ok: true, vaultState: vs };
+    }
+    if (msg?.type === 'VAULT_GET_DATA') {
+      return { ok: true, apiKey: store.apiKey, friends: structuredClone(store.friends), vaultRev: 'demo-rev-1' };
+    }
+    if (msg?.type === 'VAULT_UNLOCK') {
+      return S === 'settings-locked-error'
+        ? { ok: false, error: 'Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.' }
+        : { ok: true, vaultState: 'unlocked' };
+    }
+  };
 
   const chrome = {
     storage: { local: { get: async keys => pick(keys), set: async items => { Object.assign(store, items); } }, onChanged: event() },
@@ -79,19 +95,6 @@
       onMessage: event(),
       sendMessage: async msg => {
         const vs = vaultStateFor();
-        if (msg?.type === 'VAULT_STATUS') {
-          return vs === 'needs-conversion'
-            ? { ok: true, vaultState: vs, legacySummary: { hasKey: true, friendCount: FRIENDS.length } }
-            : { ok: true, vaultState: vs };
-        }
-        if (msg?.type === 'VAULT_GET_DATA') {
-          return { ok: true, apiKey: store.apiKey, friends: structuredClone(store.friends), vaultRev: 'demo-rev-1' };
-        }
-        if (msg?.type === 'VAULT_UNLOCK') {
-          return S === 'settings-locked-error'
-            ? { ok: false, error: 'Wrong passphrase. Try again, or use Forgot passphrase? to erase saved data and start over.' }
-            : { ok: true, vaultState: 'unlocked' };
-        }
         if (msg?.type === 'VAULT_LOCK') return { ok: true, vaultState: 'locked' };
         if (msg?.type === 'POPUP_STATUS') {
           return vs === 'unlocked'
@@ -121,6 +124,13 @@
     },
   };
   Object.defineProperty(window, 'chrome', { value: chrome, configurable: true, writable: true });
+  if (page === 'options.html') {
+    const active = {
+      scriptURL: chrome.runtime.getURL('background.js'),
+      postMessage(msg, [reply]) { reply.postMessage(vaultReply(msg)); },
+    };
+    Object.defineProperty(navigator, 'serviceWorker', { value: { ready: Promise.resolve({ active }) }, configurable: true });
+  }
 
   // Drive the page to the requested state with the same clicks a user would make,
   // then report ready (with the content height, for the popup frame).

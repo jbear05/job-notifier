@@ -28,6 +28,9 @@ Make the Job Notifier Chrome extension (Manifest V3) ready for a public Chrome W
 - Independent security review of the vault at `62b7c48`: PASS, six Lows (see the end of `docs/specs/passphrase-storage.md`'s handoff log). Lead decisions: fix Lows 1 (lock race in `analyze()`), 2 (send secrets over a worker-only port, not `runtime.sendMessage`), 3 (settings copy says "settings" are encrypted), 5 ("quit Chrome completely") and 6 (store listing's passphrase answer); accept Low 4 (dev-only plaintext leftovers) as a residual.
 
 ## Current round (2026-11-26)
+At `87e56bd`, `npm test` passed 154/154 and GitHub returned two successful checks for that exact PR #5 head. Code and security re-review found that the named vault port can still reach other extension frames and that an overlay click can outlive a Lock and re-unlock during prompt lookup. Design passed for the current copy and settings screenshot. The focused red gate had 2 passes and 6 expected failures before editing runtime. The next build uses direct service-worker messaging and checks the analysis epoch when each request arrives. Repeat the code and security review, run the full Chrome and Edge pre-check on that build, and verify the new PR head before using the manual checklist below.
+
+Earlier vault-fix plan:
 1. qa: failing tests for vault Lows 1, 2, 3, 5 and 6, and security's automatable real-Chrome checks added to precheck.js (#1 content-script isolation of `storage.session`, #3 real relaunch locked, #5 reload locked, #6 lock race, #7 LevelDB grep, #8 `setAccessLevel` support). In progress when this was written.
 2. engineer: fix Lows 1, 2, 3, 5 and 6 until the tests pass.
 3. Re-review in parallel: reviewer (code since `5a993bf`), security (the fixes plus the port change), designer (copy changes).

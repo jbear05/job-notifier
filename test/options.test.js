@@ -16,11 +16,13 @@ const FRIEND = { name: 'Priya Shah', email: 'priya.shah@example.com' };
 const SECRET_TYPES = ['VAULT_SETUP', 'VAULT_UNLOCK', 'VAULT_CONVERT_LEGACY', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_GET_DATA'];
 const settle = async () => { for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve)); };
 
-// The settings page with a stub worker that answers on either channel, as the real one would.
-async function openSettings(vaultState = 'uninitialized') {
+// The settings page with both the extension runtime and the manifest service worker recorded separately.
+async function openSettings(vaultState = 'uninitialized', workerScript = 'background.js') {
   const { document, fireDocument } = makeDocument();
   const sendMessages = []; // bodies passed to chrome.runtime.sendMessage
   const portMessages = []; // [port name, body] posted on chrome.runtime.connect ports
+  const workerMessages = [];
+  const runtimeConnections = [];
   const state = { vaultState, apiKey: '', friends: [], rev: 0 };
   const rev = () => `rev-${++state.rev}`;
   const answer = msg => {
@@ -43,17 +45,52 @@ async function openSettings(vaultState = 'uninitialized') {
       default: return undefined;
     }
   };
+  class TestPort {
+    onmessage = null;
+    events = new Map();
+    close() { this.closed = true; }
+    start() {}
+    addEventListener(type, fn) { this.events.set(type, fn); }
+    postMessage(data) {
+      const receiver = this.peer;
+      setImmediate(() => {
+        if (!receiver.closed) {
+          receiver.onmessage?.({ data: structuredClone(data) });
+          receiver.events.get('message')?.({ data: structuredClone(data) });
+        }
+      });
+    }
+  }
+  class MessageChannel {
+    constructor() {
+      this.port1 = new TestPort();
+      this.port2 = new TestPort();
+      this.port1.peer = this.port2;
+      this.port2.peer = this.port1;
+    }
+  }
+  const active = {
+    scriptURL: `chrome-extension://${RID}/${workerScript}`,
+    state: 'activated',
+    postMessage(msg, transfer) {
+      const ports = Array.isArray(transfer) ? transfer : transfer?.transfer;
+      workerMessages.push([structuredClone(msg), ports]);
+      if (ports?.length === 1 && ports[0] instanceof TestPort) ports[0].postMessage(answer(msg));
+    },
+  };
   const ctx = {
     document, location: { hash: '' }, confirm: () => true,
-    setTimeout, clearTimeout, URL, TextEncoder, TextDecoder, crypto: globalThis.crypto, btoa, atob,
+    setTimeout, clearTimeout, URL, TextEncoder, TextDecoder, crypto: globalThis.crypto, btoa, atob, MessageChannel,
+    navigator: { serviceWorker: { ready: Promise.resolve({ active, scope: `chrome-extension://${RID}/` }) } },
     chrome: {
       runtime: {
         id: RID,
-        getManifest: () => ({ version: '2.0.0' }),
+        getManifest: () => ({ version: '2.0.0', background: { service_worker: 'background.js' } }),
         getURL: p => `chrome-extension://${RID}/${p}`,
         openOptionsPage() {},
         sendMessage: async msg => { sendMessages.push(structuredClone(msg)); return answer(msg); },
         connect: ({ name } = {}) => {
+          runtimeConnections.push(name);
           const listeners = [];
           return {
             name,
@@ -79,10 +116,10 @@ async function openSettings(vaultState = 'uninitialized') {
   fireDocument('DOMContentLoaded');
   await settle();
   const $ = id => document.getElementById(id);
-  return { $, sendMessages, portMessages, heading: () => $('vault-heading').textContent };
+  return { $, sendMessages, portMessages, workerMessages, runtimeConnections, heading: () => $('vault-heading').textContent };
 }
 
-function assertSecretsOnVaultPortOnly(s, expectedOnPort) {
+function assertSecretsDirectOnly(s, expectedDirect) {
   const leaked = s.sendMessages.filter(m => SECRET_TYPES.includes(m.type)).map(m => m.type);
   assert.deepEqual(leaked, [], 'runtime.sendMessage reaches every extension frame (popup, overlays), so these must not use it');
   for (const m of s.sendMessages) {
@@ -90,12 +127,19 @@ function assertSecretsOnVaultPortOnly(s, expectedOnPort) {
       assert.ok(!JSON.stringify(m).includes(secret), `a runtime.sendMessage body (${m.type}) carries "${secret}"`);
     }
   }
-  assert.deepEqual([...new Set(s.portMessages.map(([name]) => name))], ['vault'], 'the settings page opens only the vault port');
-  const onPort = new Set(s.portMessages.map(([, m]) => m.type));
-  for (const type of expectedOnPort) assert.ok(onPort.has(type), `${type} went over the vault port`);
+  assert.deepEqual(s.runtimeConnections, [], 'runtime.connect also reaches other extension frames');
+  assert.deepEqual(s.portMessages, [], 'no request was sent to a broadcast vault port');
+  const directTypes = new Set(s.workerMessages.map(([msg]) => msg.type));
+  for (const type of expectedDirect) assert.ok(directTypes.has(type), `${type} went straight to the manifest service worker`);
+  const replies = new Set();
+  for (const [msg, ports] of s.workerMessages) {
+    assert.equal(ports?.length, 1, `${msg.type} transferred one reply endpoint`);
+    assert.ok(!replies.has(ports[0]), `${msg.type} transferred its own reply endpoint`);
+    replies.add(ports[0]);
+  }
 }
 
-test('security Low 2: setup, saving the key, adding a friend, and unlocking send secrets only on the "vault" port', async () => {
+test('security Low 2: setup, key save, friend save and unlock address only the manifest service worker', async () => {
   const s = await openSettings();
   const { $ } = s;
   assert.equal(s.heading(), 'Create a passphrase');
@@ -126,10 +170,10 @@ test('security Low 2: setup, saving the key, adding a friend, and unlocking send
   await settle();
   assert.equal(s.heading(), 'Passphrase lock', 'unlocked again');
 
-  assertSecretsOnVaultPortOnly(s, ['VAULT_SETUP', 'VAULT_GET_DATA', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_UNLOCK']);
+  assertSecretsDirectOnly(s, ['VAULT_SETUP', 'VAULT_GET_DATA', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_UNLOCK']);
 });
 
-test('security Low 2: encrypting existing data (P3) sends the passphrase only on the "vault" port', async () => {
+test('security Low 2: encrypting existing data (P3) addresses only the manifest service worker', async () => {
   const s = await openSettings('needs-conversion');
   const { $ } = s;
   assert.equal(s.heading(), 'Encrypt existing saved data');
@@ -138,5 +182,17 @@ test('security Low 2: encrypting existing data (P3) sends the passphrase only on
   $('convert-form').fire('submit');
   await settle();
   assert.equal(s.heading(), 'Passphrase lock', 'conversion finished');
-  assertSecretsOnVaultPortOnly(s, ['VAULT_CONVERT_LEGACY', 'VAULT_GET_DATA']);
+  assertSecretsDirectOnly(s, ['VAULT_CONVERT_LEGACY', 'VAULT_GET_DATA']);
+});
+
+test('security Low 2: a registration for a different worker receives no vault messages and no fallback runs', async () => {
+  const s = await openSettings('locked', 'another-worker.js');
+  assert.equal(s.heading(), 'Unlock saved data');
+  s.$('unlock-passphrase').value = PASS;
+  s.$('unlock-form').fire('submit');
+  await settle();
+
+  assertSecretsDirectOnly(s, []);
+  assert.deepEqual(s.workerMessages, [], 'the unrecognized worker receives nothing');
+  assert.equal(s.heading(), 'Unlock saved data', 'the settings page stays locked');
 });

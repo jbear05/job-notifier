@@ -564,9 +564,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
 // ── Claude ──
 
 // Resolves to the reply the popup or overlay gets. Never throws.
-async function analyze(jobText) {
-  // Captured before queueing, so a Lock sent right after the request still stops it (security Low 1).
-  const analysisEpoch = vaultEpoch;
+async function analyze(jobText, analysisEpoch) {
   const snapshot = await inVault(async () => {
     if (analysisEpoch !== vaultEpoch) return { errorReply: { ok: false, code: 'LOCKED' } };
     const info = await inspectVaultState();
@@ -578,14 +576,13 @@ async function analyze(jobText) {
     if (status !== 'ok') return { errorReply: { ok: false, code: 'NO_FRIENDS', friends: status } };
     const settings = await getNonSensitiveSettings();
     return {
-      analysisEpoch,
       friends: info.data.friends,
       settings: { ...settings, apiKey: info.data.apiKey },
     };
   });
 
+  if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
   if (snapshot.errorReply) return snapshot.errorReply;
-  if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
 
   const req = JN.buildRequest(jobText, snapshot.friends, snapshot.settings);
   // Finish before Chrome's 30 s service worker fetch-response deadline, and allow
@@ -600,26 +597,26 @@ async function analyze(jobText) {
   const timedOut = e => e?.name === 'TimeoutError';
   let response;
   try {
-    if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
+    if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
     try {
       response = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: controller.signal });
     } catch (e) {
-      if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
+      if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
       return { ok: false, error: timedOut(e) ? API_TIMEOUT_ERROR : JN.describeApiError(0) };
     }
-    if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
+    if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
     if (!response.ok) {
       const errBody = await response.json().catch(() => null);
-      if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
+      if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
       return { ok: false, error: JN.describeApiError(response.status, errBody) };
     }
     try {
       const data = await response.json();
-      if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
+      if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
       // threshold (normalized, 0-1) lets the overlay name it without reading storage.
       return { ok: true, result: JN.parseResponse(data, snapshot.friends, snapshot.settings.threshold), threshold: snapshot.settings.threshold };
     } catch (e) {
-      if (snapshot.analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
+      if (analysisEpoch !== vaultEpoch) return { ok: false, code: 'LOCKED' };
       return { ok: false, error: timedOut(e) ? API_TIMEOUT_ERROR : JN.ERRORS[e.code] || JN.ERRORS.incomplete };
     }
   } finally {
@@ -633,9 +630,10 @@ async function analyze(jobText) {
 // One request at a time per popup or tab: repeat clicks share the running one (criterion 33).
 const running = new Map();
 
-function analyzeOnce(key, jobText) {
+function analyzeOnce(key, jobText, analysisEpoch) {
+  if (analysisEpoch !== vaultEpoch) return Promise.resolve({ ok: false, code: 'LOCKED' });
   if (!running.has(key)) {
-    const p = analyze(jobText).finally(() => {
+    const p = analyze(jobText, analysisEpoch).finally(() => {
       if (running.get(key) === p) running.delete(key);
     });
     running.set(key, p);
@@ -646,7 +644,7 @@ function analyzeOnce(key, jobText) {
 // ── Messaging (criterion 32, P-03) ──
 // Content scripts can report what they saw; only extension pages can start a
 // Claude call or receive friend data. Only options.html can manage the vault,
-// over the 'vault' port; the popup can also lock it. There are no external listeners.
+// through direct service worker messaging. The popup can also lock it.
 
 async function onContentMessage(msg, sender) {
   // The host page closed the frame (Escape, or the overlay never confirmed).
@@ -721,6 +719,23 @@ const SETTINGS_MESSAGES = new Set([
   'VAULT_GET_DATA', 'VAULT_SAVE_CLAUDE', 'VAULT_SAVE_FRIENDS', 'VAULT_CONVERT_LEGACY',
 ]);
 
+// Only a top-level settings client can send vault data to this worker. The
+// transferred reply port belongs to that request, so replies can't fan out.
+self.addEventListener('message', event => {
+  const { source, data: msg, origin, ports } = event;
+  if (source?.type !== 'window' || source.frameType !== 'top-level' ||
+    origin !== `chrome-extension://${chrome.runtime.id}` || typeof source.url !== 'string' ||
+    source.url.split('#', 1)[0] !== chrome.runtime.getURL('options.html') ||
+    ports.length !== 1 || !SETTINGS_MESSAGES.has(msg?.type)) return;
+
+  const [replyPort] = ports;
+  const request = handleSettingsVaultMessage(msg)
+    .then(reply => replyPort.postMessage(reply), () => replyPort.postMessage(undefined))
+    .catch(() => {})
+    .finally(() => replyPort.close());
+  event.waitUntil(request);
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   let reply;
   if (JN.isValidContentMessage(msg, sender, chrome.runtime.id)) {
@@ -743,38 +758,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // which carries no text; the worker uses the posting it recorded for that tab.
 chrome.runtime.onConnect.addListener(port => {
   const sender = port.sender;
-  // Settings vault messages carry the passphrase, key, or friends. runtime.sendMessage would
-  // also reach the popup and overlays, so they use this worker-only port (security Low 2):
-  // one request, one reply, and no reply for anyone but options.html.
-  if (port.name === 'vault') {
-    if (!JN.isSettingsSender(sender, chrome.runtime.id)) {
-      port.disconnect();
-      return;
-    }
-    port.onMessage.addListener(msg => {
-      if (!SETTINGS_MESSAGES.has(msg?.type)) {
-        port.disconnect();
-        return;
-      }
-      handleSettingsVaultMessage(msg).then(reply => {
-        try {
-          port.postMessage(reply);
-        } catch (e) {
-          // The settings page closed before the answer arrived.
-        }
-      }, () => port.disconnect());
-    });
-    return;
-  }
   if (port.name !== 'analyze' || !JN.isExtensionPage(sender, chrome.runtime.id)) {
     port.disconnect();
     return;
   }
 
   port.onMessage.addListener(async msg => {
+    // Keep the epoch from receipt, including while an overlay looks up its posting.
+    const analysisEpoch = vaultEpoch;
     let reply;
     if (msg?.type === 'ANALYZE_JOB' && typeof msg.jobText === 'string' && JN.isStaticExtensionSender(sender, 'popup.html', chrome.runtime.id)) {
-      reply = await analyzeOnce(sender.tab ? `tab:${sender.tab.id}` : `page:${sender.documentId || sender.url}`, msg.jobText);
+      reply = await analyzeOnce(sender.tab ? `tab:${sender.tab.id}` : `page:${sender.documentId || sender.url}`, msg.jobText, analysisEpoch);
     } else if (msg?.type === 'ANALYZE_TAB' && isOverlayFrame(sender)) {
       const isCurrent = currentDocument(sender.tab.id);
       const prompt = await inSession(async () => {
@@ -784,12 +778,12 @@ chrome.runtime.onConnect.addListener(port => {
         const { autoDetect } = await getNonSensitiveSettings();
         return autoDetect && isCurrent() ? current : null;
       });
-      reply = prompt ? await analyzeOnce(`tab:${sender.tab.id}`, prompt.text) : { ok: false, code: 'NO_POSTING' };
+      reply = prompt ? await analyzeOnce(`tab:${sender.tab.id}`, prompt.text, analysisEpoch) : { ok: false, code: 'NO_POSTING' };
     } else {
       return;
     }
     try {
-      port.postMessage(reply);
+      port.postMessage(analysisEpoch === vaultEpoch ? reply : { ok: false, code: 'LOCKED' });
     } catch (e) {
       // The popup or overlay closed before the answer arrived.
     }

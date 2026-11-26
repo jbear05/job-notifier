@@ -182,12 +182,12 @@ Because the posting is stored by tab id in the extension (not in the site's stor
 | `OVERLAY_READY` | overlay → worker → matching content document | data-free signal that the rendered frame can accept clicks and take focus |
 | `OVERLAY_CLOSE` | overlay → worker | nothing |
 | `POPUP_STATUS` | popup → worker | nothing; minimal `{ vaultState }` (plus `hasKey`, `friendsStatus` only when unlocked) |
-| `VAULT_STATUS` | settings → worker (`vault` port) | nothing; `{ ok, vaultState, legacySummary? }` |
-| `VAULT_SETUP` / `VAULT_UNLOCK` / `VAULT_CONVERT_LEGACY` | settings → worker (`vault` port) | `{ passphrase }` (never stored or logged) |
+| `VAULT_STATUS` | settings → service worker directly | nothing; `{ ok, vaultState, legacySummary? }` |
+| `VAULT_SETUP` / `VAULT_UNLOCK` / `VAULT_CONVERT_LEGACY` | settings → service worker directly | `{ passphrase }` (never stored or logged) |
 | `VAULT_LOCK` | settings or popup → worker | nothing |
-| `VAULT_RESET` | settings → worker (`vault` port) | nothing |
-| `VAULT_GET_DATA` | settings → worker (`vault` port) | nothing; returns `{ ok, apiKey, friends, settings, vaultRev }` when unlocked |
-| `VAULT_SAVE_CLAUDE` / `VAULT_SAVE_FRIENDS` | settings → worker (`vault` port) | updated fields + `expectedRev` |
+| `VAULT_RESET` | settings → service worker directly | nothing |
+| `VAULT_GET_DATA` | settings → service worker directly | nothing; returns `{ ok, apiKey, friends, settings, vaultRev }` when unlocked |
+| `VAULT_SAVE_CLAUDE` / `VAULT_SAVE_FRIENDS` | settings → service worker directly | updated fields + `expectedRev` |
 | `VAULT_LOCKED` / `VAULT_CHANGED` | worker → extension pages | data-free broadcast to sync open surfaces |
 | `ANALYZE_TAB` | overlay → worker, `analyze` port | nothing; the worker uses `prompts[tabId]` |
 | `ANALYZE_JOB` | popup → worker, `analyze` port | `{ jobText }` |
@@ -200,10 +200,10 @@ The prompt and results render in an extension iframe. Friend names, emails, draf
 
 ### Sender checks
 
-Every message the worker handles goes through pure helpers in `lib/core.js`.
+The worker checks browser-supplied sender metadata before dispatching messages.
 
-- `JN.isSettingsSender(sender, runtimeId)` and `JN.isStaticExtensionSender(sender, page, runtimeId)` require `sender.id === runtimeId`, top-level `frameId` (`0` or `undefined`), and exact `chrome-extension://<runtimeId>/<page>` URL. Vault setup, unlock, reset, data retrieval, and saves are restricted to `options.html`; `POPUP_STATUS` and `ANALYZE_JOB` are restricted to `popup.html`; `VAULT_LOCK` is accepted only from `options.html` or `popup.html`.
-- The settings page sends every other vault message over a `chrome.runtime.connect({ name: 'vault' })` port, one request per port. Only the worker listens for that port, and it accepts it only when `JN.isSettingsSender` passes, so the passphrase, API key and friends never reach other extension pages (popup, overlay frames). `runtime.onMessage` ignores those message types.
+- `JN.isSettingsSender(sender, runtimeId)` and `JN.isStaticExtensionSender(sender, page, runtimeId)` check the extension ID, page URL, and top-level frame for extension messaging. `POPUP_STATUS` and `ANALYZE_JOB` are restricted to `popup.html`. `VAULT_LOCK` is accepted from `options.html` or `popup.html`.
+- Settings addresses the manifest service worker with `ServiceWorker.postMessage()` and transfers a fresh `MessageChannel` reply port per request. The worker accepts vault requests only from the top-level settings `WindowClient` on this extension's origin. The reply port restricts decrypted data to the calling settings page. Extension runtime messaging carries the data-free Lock action and state signals. [Chrome service worker messaging](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/events#serviceworkerglobalmessage)
 - `JN.isExtensionPage(sender, runtimeId)` requires Chrome's `sender.id` to match this extension and `sender.url` to use the `chrome-extension:` scheme. This supports the dynamically assigned overlay origin. It applies to overlay page messages and the `analyze` port. A content script that connects to the port is disconnected because its sender URL belongs to the web page.
 - `JN.isValidContentMessage(msg, sender, runtimeId)` accepts `JOB_SEEN`, `CONFIRMATION_SEEN`, and `OVERLAY_DISMISSED` from this extension's content script in a tab's top frame (`frameId === 0`) on an http(s) URL, with string fields under their caps (text ≤ `MAX_JOB_TEXT`, title ≤ 200). With auto-detect off, only dismissal is accepted.
 
