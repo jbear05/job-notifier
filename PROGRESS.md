@@ -1,16 +1,21 @@
 # Progress: public release (v2.0.0)
 
-Spec: [docs/specs/public-release.md](docs/specs/public-release.md). Branch: `feat/public-release` (stacked on `chore/claude-test-hook`, PR #4).
+Specs: [docs/specs/public-release.md](docs/specs/public-release.md) and [docs/specs/passphrase-storage.md](docs/specs/passphrase-storage.md). Branch: `feat/public-release` (stacked on `chore/claude-test-hook`, PR #4).
 
 ## Done
-- Public release implementation, documentation, package, and store assets are in place through the reviewed runtime checkpoint `5a993bf`. The settings image is current and the store has a fourth image for the confirmation prompt.
-- Reviewer, designer, and security passed round 3 for the navigation, overlay, and storage-scope fixes. Full suite passed 95/95, exact Bash syntax check passed, and the checkpoint ZIP contained only runtime files with no production-shaped key. The headless visual review covered 22 screenshots.
-- The user chose passphrase encryption for API keys and friend records as part of v2.0.0. See Decision 21 and the [draft passphrase storage spec](docs/specs/passphrase-storage.md).
+- Pre-encryption public release implementation, documentation, packaging, and store assets passed Round 3 reviews (`reviewer`, `designer`, `security`) at checkpoint `5a993bf` with 95/95 tests passing.
+- Passphrase encryption (Decision 21 / P1–P3) implemented at `e7cd5da` across `lib/core.js`, `background.js`, `options.*`, `popup.*`, `overlay.js`, `ui.css`, docs, and store listing.
+- Final Round 3 reviews passed (`security` PASS in Rounds 1–2, `ui-designer` PASS in Round 2, `code-reviewer` PASS in Round 3).
+- Automated verification at `e7cd5da`: `npm test` passed **112/112** (`test/vault.test.js` 17/17 + `test/core.test.js` + `test/background.test.js` + `test/content.test.js` + `test/release.test.js`), syntax check passed (`node --check` 7/7 / `npm run check --script-shell=bash`), and `git diff --check` passed.
+- Rebuilt `dist/job-notifier-2.0.0.zip` at `e7cd5da` (SHA-256 `5F682FA66D4BC150A8275DFE16A2AB13E235989A8901A781C6B4AB284E02092C`); runtime allowlist and secret scan verified.
+- Updated store assets (`docs/assets/screenshot-1-overlay.png`, `screenshot-3-settings.png`, `screenshot-4-prompt.png`, `promo-440x280.png`) and headless review screenshots (`dist/review-vault-r2/`).
+- PM milestone closeout completed for passphrase encryption (`P-01`–`P-10` and `1`–`38` audited, handoff log updated, `HANDOFF.md` updated, and release retro drafted).
 
 ## Next
-- Record the remaining passphrase decisions, specify design and security details, then run the test-first implementation and review cycle. Update store copy and screenshots to match.
-- Build and verify the final ZIP, run the user's clean-profile Chrome walkthrough, and replace the popup store screenshot with a whole-window capture. Open the release PR and verify remote CI after those checks. PR #4 was still open when checked.
-- PM closeout and retro after verification. Record the previously approved exception for the owner's email in public history and the intentional red runs reported in the handoff.
+- User runs the clean-profile Chrome walkthrough (load unpacked candidate/`dist/job-notifier-2.0.0.zip`, verify passphrase setup/unlock/lock/reset/P3 flows, live keyboard/focus, `use_dynamic_url` & `sender.url`, permissions, navigation cleanup, copy failure, XSS literal rendering, and zero requests before click).
+- User recaptures `docs/assets/screenshot-2-popup.png` as a whole Chrome window (1280x800 RGB PNG with toolbar visible, unlocked `"Job posting found"` + `"Unlocked for this session · Lock now"` footer).
+- Open PR for `feat/public-release` and verify remote CI passes.
+- Final PM release closeout after real-Chrome evidence and PR/CI pass.
 
 ## Blocked
-- Passphrase implementation awaits decisions on unlock duration, friends export format, and existing private prerelease data. The local ZIP built from `5a993bf` still uses the earlier storage design. It is a checkpoint build for testing and needs rebuilding after encryption.
+- None for code or packaging. Real-Chrome manual checks, whole-window `screenshot-2-popup.png`, PR/CI verification, and Chrome Web Store submission are pending user steps.
