@@ -27,7 +27,7 @@
           <ul>
             <li><strong>Encrypted in this Chrome profile.</strong> Your passphrase encrypts your Anthropic API key and friends list on disk.</li>
             <li><strong>No recovery.</strong> Job Notifier has no server and cannot recover a forgotten passphrase. If you forget it, you will have to erase saved data and start over.</li>
-            <li><strong>Unlocked per Chrome session.</strong> Once unlocked, your data stays unlocked until you click <strong>Lock now</strong> or close Chrome.</li>
+            <li><strong>Unlocked per Chrome session.</strong> Once unlocked, your data stays unlocked until you click <strong>Lock now</strong> or quit Chrome completely.</li>
           </ul>
         </div>
         <div class="field">
@@ -134,7 +134,7 @@
       </div>
 
       <div id="unlocked-view" class="stack" hidden>
-        <p>Your API key and friends list stay unlocked until you click Lock now or close Chrome.</p>
+        <p>Your API key and friends list stay unlocked until you click Lock now or quit Chrome completely.</p>
         <div id="lock-pending" class="loading" role="status" hidden>
           <span class="spinner" aria-hidden="true"></span>
           <span>Locking…</span>
@@ -160,7 +160,7 @@
           <li><strong>You pay Anthropic directly.</strong> Each time you click Find friends, Job Notifier sends one request to Anthropic's API with your key. It's billed to your Anthropic account at Anthropic's prices. Job Notifier itself is free. <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">Anthropic API pricing</a></li>
           <li><strong>Sent to Anthropic:</strong> the job posting text (up to 8,000 characters), and each included friend's name, skills, interests, and level.</li>
           <li><strong>Never sent:</strong> your friends' email addresses and any recruiter link you paste. They stay in this browser. Your API key goes only to Anthropic, to authorize each request. Your passphrase never leaves this browser.</li>
-          <li><strong>Encrypted with your passphrase.</strong> Your API key and friends list are encrypted in this Chrome profile and stay unlocked until you click Lock now or close Chrome. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a></li>
+          <li><strong>Encrypted with your passphrase.</strong> Your API key and friends list are encrypted in this Chrome profile and stay unlocked until you click Lock now or quit Chrome completely. To cap what any key can cost, set a spend limit in the Anthropic Console. <a href="https://platform.claude.com/settings/spend-limits" target="_blank" rel="noopener">Set a spend limit</a></li>
           <li>Nothing goes to the developer or to any analytics service. <a href="https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md" target="_blank" rel="noopener">Privacy policy</a></li>
         </ul>
       </div>
@@ -308,7 +308,7 @@
       <h2 id="privacy-heading">Privacy and data</h2>
     </div>
     <div class="section-body">
-      <p>Your API key, settings, and friends are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or close Chrome. Job postings you view are kept in memory until you close their tab or Chrome.</p>
+      <p>Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or quit Chrome completely. Your model, match, and auto-detect preferences aren't encrypted. Job postings you view are kept in memory until you close their tab or quit Chrome completely.</p>
       <p class="actions">
         <a href="https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md" target="_blank" rel="noopener">Read the privacy policy</a>
         <a href="https://github.com/jbear05/job-notifier/issues" target="_blank" rel="noopener">Report a problem</a>

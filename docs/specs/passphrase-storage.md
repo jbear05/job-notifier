@@ -438,3 +438,40 @@ All vault reads/writes execute sequentially through a single worker promise queu
 | PM | Pre-sign-off audit (2026-11-26) at HEAD `b33a65c`. The full table, evidence, and rule are in `public-release.md`, under "PM pre-sign-off audit (2026-11-26)" in its handoff log. **Met:** P-02, P-03, P-08, P-09 (tests plus security and code-reviewer PASS). **Pending manual evidence** (steps in `docs/release-walkthrough.md`): P-01 (2.2, 3.3, 3.10, 11.4), P-04 (4.1–4.8), P-05 (2.1, 4.2, 9.2, 12.1, 12.2), P-06 (1.3, 4.1, 4.5, 4.6, 6.6–6.8, 8.5), P-07 (3.5–3.9, 3.12), P-10 (1.1, 13). **Not met:** none. Remote CI on PR #5 now passes 2/2 after `fa35c09`. The current release zip SHA-256 is `a972905259c46777057c7d70591759f1fa6126302fc71b7232c0b774d8837f44`, which replaces the `e7cd5da` hash above. Correction to the PM row above: that release retro draft was never saved. The interim retro is now in the shared team-notes `retros.md`. | User (Chrome walkthrough), then PM |
 
 **Team lead, independent security review of the vault (Claude `security`, 2026-11-26, at 62b7c48):** PASS. Nothing Critical, High or Medium; six Lows. Low 1: `analyze()` captures `analysisEpoch` after the queue, so a Lock right after Find friends can still send the request (background.js:553-586; fix before release). Low 2: options.js `sendWorker` uses `runtime.sendMessage`, which also delivers the passphrase, key and friends to other extension frames (popup, overlay); use a worker-only port. Low 3: options.html:311 says "settings" are encrypted; only the key and friends are. Low 4: a profile that fails the strict P3 check keeps plaintext after setup until the next unlock silently deletes it; dev-only (1.x and pre-encryption 2.0.0 were never public), accepted by the lead as a residual. Low 5: "close Chrome" should be "quit Chrome completely". Low 6: the store listing's authentication-info answer should cover the passphrase. Real-Chrome checks: content-script isolation of `storage.session`/`onChanged` (High if it fails), password-manager prompts, a real restart, windows-closed-but-running, reload/update locked, the lock race after the fix, a LevelDB grep, and `setAccessLevel` support. Next: qa tests for Lows 1–2, engineer fixes 1, 2, 3, 5 and 6, and qa adds the automatable checks to the pre-check.
+
+**QA, red tests for the security review's Lows (2026-11-26, at 0097ab7):** `npm test` is 154 tests, 136 pass, 18 fail, each for the intended reason.
+- **Low 1:** after a Lock sent in the same task as `ANALYZE_JOB`, the popup must get `{ ok: false, code: 'LOCKED' }` and no fetch happens. Fails now: results come back. The overlay's `ANALYZE_TAB` variant already passes (its prompt lookup queues behind the Lock) and stays as a guard.
+- **Low 2, port contract:**
+  - **Port:** options.js opens `chrome.runtime.connect({ name: 'vault' })` once per request and posts one message, which keeps today's message shapes (for example `{ type: 'VAULT_SETUP', passphrase }`). The worker answers with one `port.postMessage(reply)`, which keeps today's reply shapes, and options.js then disconnects. A disconnect before the reply counts as no reply.
+  - **What goes on the port:** `VAULT_STATUS`, `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_RESET`, `VAULT_GET_DATA`, `VAULT_SAVE_CLAUDE`, `VAULT_SAVE_FRIENDS` and `VAULT_CONVERT_LEGACY`. `VAULT_LOCK` carries nothing and stays on `sendMessage` for settings and the popup.
+  - **Gate:** the worker accepts a `vault` port only when `JN.isSettingsSender(port.sender, chrome.runtime.id)`; otherwise it disconnects without a reply.
+  - **Fail closed on `onMessage`:** `runtime.onMessage` no longer handles `VAULT_SETUP`, `VAULT_UNLOCK`, `VAULT_CONVERT_LEGACY`, `VAULT_SAVE_CLAUDE`, `VAULT_SAVE_FRIENDS` or `VAULT_GET_DATA`. No reply and no change, even from options.html.
+  - **Tests:**
+    - `test/vault.test.js` covers the worker side.
+    - The new `test/options.test.js` runs options.js through setup, saving the key, adding a friend, lock, unlock and P3 conversion. It asserts that no `sendMessage` carries those types or the passphrase, key or friend, and that each went on the `vault` port.
+    - The vault harness now sends the eight types on the port, so the 10 existing vault tests and the background timeout test fail until the port exists.
+- **Lows 3, 5, 6, static checks:**
+  - **Low 3:** options.html has no "settings … are encrypted".
+  - **Low 5:** no "close Chrome" in runtime copy, PRIVACY.md or docs/store-listing.md, and "quit Chrome completely" appears in options.html, PRIVACY.md and the listing. README.md still says "close Chrome" five times and isn't tested.
+  - **Low 6:** the listing's Authentication information row names the passphrase, local processing, never stored, and never sent.
+- **Pre-check (not run yet):** rows V1, V3, V5, V6, V7 and V8 in `docs/walkthrough-auto/precheck.js` cover security's #1, #3 (Edge only), #5, #6, #7 and #8. #2 and #4 are marked manual.
+- **Next owner:** engineer.
+
+**Engineer, fixes for the security review's Lows 1, 2, 3, 5 and 6 (2026-11-26, on 0097ab7):** `npm test` is 154 tests, 154 pass. `npm run check --script-shell=bash` passes and `git diff --check` is clean. Nothing is committed. The crypto, the vault queue, the epoch checks, the reply shapes and the manifest are unchanged, and Low 4 was left alone as accepted.
+- **Low 1 (`background.js:569`):** `analyze()` now captures `analysisEpoch` before `inVault()`. The queued step returns `{ ok: false, code: 'LOCKED' }` first if the epoch has changed (`:571`), so a Lock in the same task as `ANALYZE_JOB` makes no fetch. The later epoch checks are as before.
+- **Low 2:**
+  - **Worker (`background.js:749`):** a `vault` port is accepted only when `JN.isSettingsSender(port.sender, …)` passes; otherwise it disconnects with no reply. Each message on the port must be one of the eight `SETTINGS_MESSAGES` types, or the port disconnects. It runs through the existing `handleSettingsVaultMessage()` and gets one `postMessage(reply)`; a rejected handler disconnects with no reply.
+  - **`runtime.onMessage` (`:732`):** the settings-vault branch is removed, so none of the eight types gets a reply or makes a change there. `VAULT_LOCK` (settings or popup) and `POPUP_STATUS` stay on `sendMessage`.
+  - **Settings page (`options.js:217`):** `sendWorker` opens `chrome.runtime.connect({ name: 'vault' })` per request, posts the unchanged message, resolves with the first reply, then disconnects. A disconnect before the reply resolves `undefined` and reads `lastError` to keep the console quiet. `VAULT_LOCK` still uses `sendMessage`.
+- **Low 3 (`options.html:311`):** the line now says "Your API key and friends list are encrypted with your passphrase in this browser…" and "Your model, match, and auto-detect preferences aren't encrypted."
+- **Low 5:** every "close Chrome", "closes Chrome", and "close that tab or Chrome" became "quit Chrome completely" (or "quits Chrome completely").
+  - `options.html`: lines 30, 137, 163 and 311.
+  - `PRIVACY.md`: lines 23–25, 31 and 67.
+  - `docs/store-listing.md`: lines 52, 104 and 138.
+  - `README.md`: lines 22, 88, 100, 107 and 144.
+- **Low 6 (`docs/store-listing.md:135`):** the row says the key is stored locally, encrypted with the user's passphrase, and sent only to Anthropic, and that the passphrase is processed locally in the browser, never stored, and never sent.
+- **For the reviewer:**
+  - `DOCS.md` still describes vault messages as plain "settings → worker" messages and doesn't mention the `vault` port. It was outside this brief.
+  - The worker doesn't enforce one message per port. options.js disconnects after one reply.
+- **For qa's pre-check:** V1 (the lock race) and the settings flows in a real Chrome: setup, unlock, save, P3 conversion and reset over the port. Also confirm that no "Unchecked runtime.lastError" appears when the worker restarts mid-request.
+- **Next owner:** reviewer and security.

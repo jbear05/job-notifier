@@ -565,8 +565,10 @@ chrome.tabs.onRemoved.addListener(tabId => {
 
 // Resolves to the reply the popup or overlay gets. Never throws.
 async function analyze(jobText) {
+  // Captured before queueing, so a Lock sent right after the request still stops it (security Low 1).
+  const analysisEpoch = vaultEpoch;
   const snapshot = await inVault(async () => {
-    const analysisEpoch = vaultEpoch;
+    if (analysisEpoch !== vaultEpoch) return { errorReply: { ok: false, code: 'LOCKED' } };
     const info = await inspectVaultState();
     if (info.vaultState !== 'unlocked') {
       return { errorReply: { ok: false, code: info.vaultState === 'needs-conversion' ? 'NEEDS_CONVERSION' : info.vaultState.toUpperCase() } };
@@ -643,8 +645,8 @@ function analyzeOnce(key, jobText) {
 
 // ── Messaging (criterion 32, P-03) ──
 // Content scripts can report what they saw; only extension pages can start a
-// Claude call or receive friend data. Only options.html can manage the vault.
-// There are no external listeners.
+// Claude call or receive friend data. Only options.html can manage the vault,
+// over the 'vault' port; the popup can also lock it. There are no external listeners.
 
 async function onContentMessage(msg, sender) {
   // The host page closed the frame (Escape, or the overlay never confirmed).
@@ -729,8 +731,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     reply = handleVaultLock();
   } else if (msg?.type === 'POPUP_STATUS' && JN.isStaticExtensionSender(sender, 'popup.html', chrome.runtime.id)) {
     reply = handlePopupStatus();
-  } else if (SETTINGS_MESSAGES.has(msg?.type) && JN.isSettingsSender(sender, chrome.runtime.id)) {
-    reply = handleSettingsVaultMessage(msg);
   } else {
     return false;
   }
@@ -743,6 +743,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // which carries no text; the worker uses the posting it recorded for that tab.
 chrome.runtime.onConnect.addListener(port => {
   const sender = port.sender;
+  // Settings vault messages carry the passphrase, key, or friends. runtime.sendMessage would
+  // also reach the popup and overlays, so they use this worker-only port (security Low 2):
+  // one request, one reply, and no reply for anyone but options.html.
+  if (port.name === 'vault') {
+    if (!JN.isSettingsSender(sender, chrome.runtime.id)) {
+      port.disconnect();
+      return;
+    }
+    port.onMessage.addListener(msg => {
+      if (!SETTINGS_MESSAGES.has(msg?.type)) {
+        port.disconnect();
+        return;
+      }
+      handleSettingsVaultMessage(msg).then(reply => {
+        try {
+          port.postMessage(reply);
+        } catch (e) {
+          // The settings page closed before the answer arrived.
+        }
+      }, () => port.disconnect());
+    });
+    return;
+  }
   if (port.name !== 'analyze' || !JN.isExtensionPage(sender, chrome.runtime.id)) {
     port.disconnect();
     return;

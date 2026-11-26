@@ -20,15 +20,15 @@ All of this is stored on your computer, in Chrome's extension storage for your p
 |---|---|---|
 | Your Anthropic API key and friends list (names, email addresses, skills, interests, level, whether each is included) | `chrome.storage.local` (`vault`, encrypted with your passphrase) | Until you change them, erase saved data, or remove the extension |
 | Model, effort, match threshold, and whether auto-detect is on | `chrome.storage.local` (`settings`, `autoDetect`) | Until you change them or remove the extension |
-| Session unlock key (`vaultKey`) | `chrome.storage.session` | In memory only while unlocked, until you click **Lock now**, erase saved data, or close Chrome |
-| Job postings you viewed: the posting text (up to 8,000 characters), page title, the site's hostname (such as `jobs.example.com`, never the full address), and time viewed | `chrome.storage.session` | In memory only, until you close that tab or close Chrome. A posting is offered after a confirmation only within 30 minutes of viewing it |
-| A pending "Find friends for this job?" prompt (the posting and the site that showed the confirmation), and fingerprints of postings already offered | `chrome.storage.session` | In memory only. The prompt is cleared when you close it, leave or reload the page, or close the tab (address changes within the same page keep it); everything here is cleared when you close Chrome |
+| Session unlock key (`vaultKey`) | `chrome.storage.session` | In memory only while unlocked, until you click **Lock now**, erase saved data, or quit Chrome completely |
+| Job postings you viewed: the posting text (up to 8,000 characters), page title, the site's hostname (such as `jobs.example.com`, never the full address), and time viewed | `chrome.storage.session` | In memory only, until you close that tab or quit Chrome completely. A posting is offered after a confirmation only within 30 minutes of viewing it |
+| A pending "Find friends for this job?" prompt (the posting and the site that showed the confirmation), and fingerprints of postings already offered | `chrome.storage.session` | In memory only. The prompt is cleared when you close it, leave or reload the page, or close the tab (address changes within the same page keep it); everything here is cleared when you quit Chrome completely |
 
 Analysis results (the job summary, scores, and drafts) are not stored. They exist only while the popup or results panel is open.
 
 Your API key and friends list are **encrypted at rest** using AES-256-GCM with a key derived from a **passphrase** you choose (PBKDF2-SHA256). Your passphrase is never stored anywhere and never leaves this browser. Job Notifier has no server and **cannot recover** a forgotten passphrase; if you forget it, you must use **Forgot passphrase?** in settings to erase your saved key and friends list and start over.
 
-Once you unlock settings with your passphrase, your data stays unlocked in Chrome's session memory until you click **Lock now** (in settings or the popup) or close Chrome. While unlocked, the extension keeps the session key in `chrome.storage.session` (which content scripts cannot read) so you aren't prompted on every page. Locking clears the session key and wipes any displayed API key, friend list, or analysis results from open extension pages.
+Once you unlock settings with your passphrase, your data stays unlocked in Chrome's session memory until you click **Lock now** (in settings or the popup) or quit Chrome completely. While unlocked, the extension keeps the session key in `chrome.storage.session` (which content scripts cannot read) so you aren't prompted on every page. Locking clears the session key and wipes any displayed API key, friend list, or analysis results from open extension pages.
 
 To cap what any key can cost, set a spend limit for your Anthropic organization at [platform.claude.com/settings/spend-limits](https://platform.claude.com/settings/spend-limits).
 
@@ -64,7 +64,7 @@ Job Notifier's use of this data follows the Chrome Web Store User Data Policy, i
 - **Encrypted key and friends list:** in settings, click **Forgot passphrase?** (or **Erase saved data**) and confirm to permanently erase the encrypted API key and friends list while keeping model, match, and auto-detect preferences.
 - **Only your key:** unlock settings, clear the API key field, and click **Save**.
 - **Friends:** unlock settings and remove them one by one. An exported friends file is yours to delete; it is unencrypted and contains email addresses, so keep it private.
-- **Recent postings:** close the tab, or close Chrome.
+- **Recent postings:** close the tab, or quit Chrome completely.
 
 Erasing or overwriting data uses Chrome's extension storage API (logical deletion). Prior OS/browser profile backups or underlying storage compaction blocks written before encryption or deletion are outside the extension's control. Requests already sent to Anthropic are covered by Anthropic's retention policies. Deleting the key here doesn't delete the key itself; revoke it in the Claude Console if you no longer want it to work.
 

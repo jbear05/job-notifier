@@ -6,6 +6,8 @@
 //        [--work <scratch dir>] [--port 8080] [--results docs/walkthrough-auto/RESULTS.md] [--only A|B]
 //
 // About 7 minutes per browser. Use a new --work folder each time. Don't run two browsers at once on one port.
+// Rows V1-V8 are security's real-Chrome checks from the vault review. #3 (V3) needs a relaunch that loads the
+// extension from --load-extension, which only Edge accepts, so it runs as run C with --browser edge.
 //
 // - Unzips the release zip into <work>/ext-release, and makes <work>/ext-allsites: a test-only copy whose
 //   manifest also lists https://*/* and http://*/* under host_permissions, because headless can't click
@@ -80,11 +82,19 @@ const STEPS = [
   ['13.1', 0, 'Screenshot 2: set up the state'], ['13.2', 0, 'Screenshot 2: snip the window'], ['13.3', 0, 'Screenshot 2: convert and npm test'],
   ['X1', 0, 'Extra: content-script negatives (32a)'], ['X2', 0, 'Extra: API error mapping (9, 25)'], ['X3', 0, 'Extra: what the request carries (15)'],
   ['X4', 0, 'Extra: closing a tab clears its posting'], ['X5', 0, 'Extra: no errors logged during the run'],
+  // Security's real-Chrome checks from its vault review (docs/specs/passphrase-storage.md handoff log, 2026-11-26).
+  ['V1', 1, 'Vault #1: a content script can\'t read the session key or see it change'], ['V2', 0, 'Vault #2: password-manager prompts'],
+  ['V3', 1, 'Vault #3: a relaunch without re-adding the extension stays locked'], ['V4', 0, 'Vault #4: windows closed while Chrome keeps running'],
+  ['V5', 1, 'Vault #5: an extension reload stays locked'], ['V6', 1, 'Vault #6: Lock right after Find friends sends no request'],
+  ['V7', 1, 'Vault #7: no key, friend, passphrase, or session key in the profile\'s LevelDB'], ['V8', 0, 'Vault #8: storage setAccessLevel support (report)'],
 ];
 const NOT_AUTOMATED = {
   '13.1': 'Needs a real Chrome window with its toolbar; headless has no browser UI.',
   '13.2': 'Windows snip of the real window.',
   '13.3': 'Depends on the 13.2 snip.',
+  V2: 'Manual: headless shows no browser bubbles. Create the passphrase, unlock, and save the key in a windowed Chrome, and confirm Chrome never offers to save any of them as a password.',
+  V3: IS_EDGE ? 'Run C did not run.' : 'Branded Chrome ignores --load-extension and drops DevTools-loaded extensions when it exits, so this runs only in Edge: --browser edge.',
+  V4: 'Manual: headless has no windows. With Chrome set to keep running after its last window closes, close every window, reopen Chrome, and check the popup (still unlocked, which is why the copy says quit Chrome completely). Then quit Chrome completely and check it is locked.',
 };
 const R = new Map();
 const rec = id => { if (!R.has(id)) R.set(id, { checks: [], notes: [], manual: '' }); return R.get(id); };
@@ -140,11 +150,11 @@ function killStray(profile) {
 class Browser {
   constructor(profile) { this.profile = profile; }
 
-  start() {
+  start(extraArgs = []) {
     fs.mkdirSync(this.profile, { recursive: true });
     const args = ['--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', `--user-data-dir=${this.profile}`,
       '--no-first-run', '--no-default-browser-check', '--window-size=1280,800', '--disable-background-networking', '--disable-component-update',
-      '--disable-sync', '--disable-default-apps', '--no-pings', '--disable-domain-reliability', '--disable-client-side-phishing-detection', 'about:blank'];
+      '--disable-sync', '--disable-default-apps', '--no-pings', '--disable-domain-reliability', '--disable-client-side-phishing-detection', ...extraArgs, 'about:blank'];
     this.proc = spawn(EXE, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
     this.exited = new Promise(r => this.proc.once('exit', r));
     this.nextId = 0;
@@ -235,7 +245,7 @@ class Run {
 
   async launch() {
     this.b = new Browser(this.profile);
-    this.b.start();
+    this.b.start(this.launchArgs);
     this.targets = new Map();
     this.frames = new Map();
     this.contexts = new Map();
@@ -667,6 +677,11 @@ async function runA() {
     manual('1.2', 'Report screenshot of the Details page from real Chrome, if the lead wants one from a windowed run.');
   });
 
+  await step('V8', async () => {
+    const r = await A.swv('[typeof chrome.storage.local.setAccessLevel, typeof chrome.storage.session.setAccessLevel]');
+    check('V8', true, `reported: storage.local.setAccessLevel is ${r[0]}, storage.session.setAccessLevel is ${r[1]} (the extension never calls either)`);
+  });
+
   await step('1.3', async () => {
     const P = await A.popup(S);
     eq('1.3', 'heading', await P.text('#panel h2'), 'Set up Job Notifier');
@@ -1027,6 +1042,22 @@ async function runA() {
     await A.unlock(S);
   });
 
+  await step('V6', async () => {
+    // Security Low 1: the popup opens the analyze port and sends Lock in the same task, before the worker's vault queue runs.
+    const P = await A.popup(first2);
+    const m = A.mark();
+    const reply = await P.raw("new Promise(r => { const port = chrome.runtime.connect({ name: 'analyze' }); port.onMessage.addListener(r); port.onDisconnect.addListener(() => r('disconnected'));"
+      + " port.postMessage({ type: 'ANALYZE_JOB', jobText: 'Data engineering intern, Python and SQL, remote internship. '.repeat(3) });"
+      + " chrome.runtime.sendMessage({ type: 'VAULT_LOCK' }); setTimeout(() => r('no reply in 10 s'), 10000); })");
+    await sleep(1500);
+    eq('V6', 'popup: analyze request, then Lock in the same task: reply', reply, { ok: false, code: 'LOCKED' });
+    eq('V6', 'Claude requests', A.api(m).length, 0);
+    await A.close(P);
+    await S.until("_t(_id('vault-heading')) === 'Unlock saved data'", 6000);
+    await A.unlock(S);
+    manual('V6', 'The overlay variant (ANALYZE_TAB) is covered by test/vault.test.js; the overlay cannot send Lock itself, so a real-Chrome race needs two pages.');
+  });
+
   await step('8.4', async () => {
     let P = await A.popup(first2);
     let m = A.mark();
@@ -1278,6 +1309,28 @@ async function runA() {
     const r = await A.swv("(async () => { const local = await chrome.storage.local.get(null), session = await chrome.storage.session.get(null), sync = await chrome.storage.sync.get(null);"
       + " const all = JSON.stringify([local, session, sync]); return ['vault' in local, 'apiKey' in local.settings, 'friends' in local, all.includes('sk-ant-'), all.includes('Priya')]; })()");
     eq('12.5', 'vault, settings.apiKey, friends key, includes sk-ant-, includes Priya', r, [true, false, false, false, false]);
+  });
+
+  await step('V5', async () => {
+    eq('V5', 'unlocked before the reload', await A.swv("!!(await chrome.storage.session.get('vaultKey')).vaultKey"), true);
+    const vault = await A.swv("JSON.stringify((await chrome.storage.local.get('vault')).vault)");
+    const swUrl = `${A.origin}/background.js`;
+    const oldSw = [...A.targets.values()].find(t => t.type === 'service_worker' && t.url === swUrl)?.targetId;
+    // Loading the same folder again is how DevTools reloads an unpacked extension in place.
+    const id = (await A.b.send('Extensions.loadUnpacked', { path: A.extDir })).id;
+    check('V5', id === A.id, `reloaded in place, same ID: ${id === A.id}`);
+    A.swSession = null;
+    if (oldSw) A.targets.delete(oldSw);
+    S = A.settings = await A.open(`${A.origin}/options.html`);
+    await S.until("_t(_id('vault-heading')) && _t(_id('vault-heading')) !== ''", 8000);
+    await sleep(800);
+    eq('V5', 'settings after the reload', await S.text('#vault-heading'), 'Unlock saved data');
+    eq('V5', 'session.get(null)', await A.swv('chrome.storage.session.get(null)'), {});
+    eq('V5', 'encrypted vault kept', await A.swv(`JSON.stringify((await chrome.storage.local.get('vault')).vault) === ${J(vault)}`), true);
+    const P = await A.popup(first2);
+    eq('V5', 'popup', await P.text('#panel h2'), 'Locked');
+    await A.close(P);
+    manual('V5', 'A Chrome Web Store update (the run reloaded the unpacked folder).');
   });
 
   await step('11.4', async () => {
@@ -1764,6 +1817,24 @@ async function runB() {
     if (await B.hasFrame(P)) { await O.click('#close-btn'); await P.until("!_q('iframe[title=\"Job Notifier\"]')", 4000); }
   });
 
+  await step('V1', async () => {
+    // Security check #1: storage.session stays at TRUSTED_CONTEXTS, so a content script can't read vaultKey or hear it change.
+    await B.posting(P, tabId);
+    const world = B.contentWorld(P);
+    if (!check('V1', !!world, `content script world found: ${world ? world.name : 'none'}`)) return;
+    const read = await P.raw("chrome.storage.session.get('vaultKey').then(r => 'read: ' + JSON.stringify(r), e => 'refused: ' + e.message)", { contextId: world.id });
+    check('V1', read.startsWith('refused'), `storage.session.get('vaultKey') from the content script: ${read}`);
+    await P.raw("globalThis.__areas = []; chrome.storage.onChanged.addListener((c, area) => globalThis.__areas.push(area + ': ' + Object.keys(c).join(',')));"
+      + " try { chrome.storage.session.onChanged.addListener(c => globalThis.__areas.push('session.onChanged: ' + Object.keys(c).join(','))); } catch (e) { globalThis.__areas.push('session.onChanged unavailable: ' + e.message); }"
+      + ' true', { contextId: world.id });
+    await B.lock(S);
+    await B.unlock(S);
+    await sleep(800);
+    const areas = await P.raw('globalThis.__areas', { contextId: world.id });
+    eq('V1', 'session-area change events the content script saw during Lock and unlock', areas.filter(a => /^session/.test(a) && !/unavailable/.test(a)), []);
+    note('V1', `every storage event the content script saw: ${J(areas)}`);
+  });
+
   await step('X1', async () => {
     await B.confirm(P, tabId);
     const ctx = B.contentWorld(P);
@@ -1954,7 +2025,78 @@ async function runB() {
     eq('X5', 'run B: worker console errors', swErr, []);
   });
 
+  // V7 needs the live session key, so read it before Chrome exits and its LevelDB files are final.
+  let vaultKey = (await B.swv("chrome.storage.session.get('vaultKey')").catch(() => ({}))).vaultKey;
+  if (!vaultKey) {
+    await B.unlock(S).catch(() => {});
+    vaultKey = (await B.swv("chrome.storage.session.get('vaultKey')").catch(() => ({}))).vaultKey;
+  }
   await B.b.stop();
+
+  await step('V7', async () => {
+    if (!check('V7', !!vaultKey, 'read the session key while unlocked')) return;
+    const needles = [['API key', KEY], ['friend name', 'Priya Shah'], ['friend email', 'priya.shah@example.com'], ['passphrase', PASS], ['session vaultKey', vaultKey]];
+    const hits = scanProfile(B.profile, needles);
+    eq('V7', `plaintext secrets in the profile's LevelDB files (${hits.levelDbFiles} files searched)`, hits.levelDb, []);
+    note('V7', `outside LevelDB (other profile files, for the #2 password-manager check): ${J(hits.other)}`);
+  });
+}
+
+// Security check #7: searches every file of a stopped profile for each [label, text] (UTF-8 and UTF-16LE).
+// LevelDB files are *.ldb, *.log and MANIFEST-* in a folder that has a CURRENT file.
+function scanProfile(dir, needles) {
+  const out = { levelDb: [], other: [], levelDbFiles: 0 };
+  const walk = d => {
+    for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+      const file = path.join(d, ent.name);
+      if (ent.isDirectory()) { walk(file); continue; }
+      let buf;
+      try { if (fs.statSync(file).size > 64 * 1024 * 1024) continue; buf = fs.readFileSync(file); } catch (e) { continue; }
+      const levelDb = /\.(ldb|log)$|^MANIFEST-/.test(ent.name) && fs.existsSync(path.join(d, 'CURRENT'));
+      if (levelDb) out.levelDbFiles++;
+      for (const [label, text] of needles) {
+        if (buf.includes(Buffer.from(text, 'utf8')) || buf.includes(Buffer.from(text, 'utf16le'))) {
+          (levelDb ? out.levelDb : out.other).push(`${label} in ${path.relative(dir, file)}`);
+        }
+      }
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+// ── Run C (Edge only): security check #3, a real relaunch that loads the extension from the command line ──
+// Branded Chrome ignores --load-extension and forgets DevTools-loaded extensions at exit, so it can't run this.
+
+async function runC() {
+  const dir = path.join(WORK, 'ext-release');
+  const C = new Run('C', dir);
+  C.launchArgs = [`--disable-extensions-except=${dir}`, `--load-extension=${dir}`];
+  const startC = async () => {
+    await C.launch();
+    const E = await C.extPage();
+    C.id = await E.until("chrome.developerPrivate.getExtensionsInfo().then(all => (all.find(e => e.name === 'Job Notifier') || {}).id)", 10000, 'the command-line extension');
+    C.origin = `chrome-extension://${C.id}`;
+  };
+  await startC();
+  await step('V3', async () => {
+    const S = C.settings = await C.open(`${C.origin}/options.html`);
+    await S.until("_t(_id('vault-heading')) === 'Create a passphrase'", 8000);
+    await S.js(`_id('setup-passphrase').value = ${J(PASS)}; _id('setup-confirm').value = ${J(PASS)}; _id('setup-submit').click(); return true;`);
+    await S.until("_t(_id('vault-heading')) === 'Passphrase lock' && _vis(_id('friend-form'))", 10000);
+    eq('V3', 'unlocked before the relaunch', await C.swv("!!(await chrome.storage.session.get('vaultKey')).vaultKey"), true);
+    const vault = await C.swv("JSON.stringify((await chrome.storage.local.get('vault')).vault)");
+    await C.b.stop();
+    await startC(); // same profile and flags; the extension is not loaded again through DevTools
+    const S2 = C.settings = await C.open(`${C.origin}/options.html`);
+    await S2.until("_t(_id('vault-heading')) && _t(_id('vault-heading')) !== ''", 8000);
+    await sleep(800);
+    eq('V3', 'settings after the relaunch', await S2.text('#vault-heading'), 'Unlock saved data');
+    eq('V3', 'session.get(null)', await C.swv('chrome.storage.session.get(null)'), {});
+    eq('V3', 'encrypted vault kept', await C.swv(`JSON.stringify((await chrome.storage.local.get('vault')).vault) === ${J(vault)}`), true);
+    manual('V3', "Quit with Exit from Chrome's menu in a windowed run (4.8 / #4).");
+  });
+  await C.b.stop();
 }
 
 // ── Report ──
@@ -1972,7 +2114,7 @@ function markdown(meta) {
   const rows = [];
   for (const [id, blocker, title] of STEPS) {
     const st = statusOf(id);
-    if (!id.startsWith('X')) { counts[st]++; if (blocker) blockers[st]++; }
+    if (/^\d/.test(id)) { counts[st]++; if (blocker) blockers[st]++; } // X and V rows aren't walkthrough steps
     const r = R.get(id) || { checks: [], notes: [], manual: '' };
     const failed = r.checks.filter(c => !c.pass).map(c => `FAIL ${c.evidence}`);
     const passed = r.checks.filter(c => c.pass).map(c => c.evidence);
@@ -2030,13 +2172,15 @@ async function main() {
   log(`work folder: ${WORK}\nbrowser: ${EXE}\nzip: ${ZIP} (${sha})`);
   const server = await serve();
   try {
-    const only = arg('only', 'AB'); // --only A or --only B runs one profile, for debugging
+    const only = arg('only', 'ABC'); // --only A, B or C runs one profile, for debugging
     if (only.includes('A')) await runA().catch(e => log('run A stopped:', e.stack));
     if (only.includes('B')) await runB().catch(e => log('run B stopped:', e.stack));
+    if (only.includes('C') && IS_EDGE) await runC().catch(e => log('run C stopped:', e.stack));
   } finally {
     server.close();
     killStray(path.join(WORK, 'profile-A'));
     killStray(path.join(WORK, 'profile-B'));
+    killStray(path.join(WORK, 'profile-C'));
   }
   const meta = {
     date: new Date().toISOString().slice(0, 10), browserA: report.versionA, browserB: report.versionB, sha, idA: report.idA, idB: report.idB,

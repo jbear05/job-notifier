@@ -19,7 +19,7 @@ You need a passphrase (to encrypt your saved data in Chrome), an Anthropic API k
 On first run, Job Notifier settings asks you to create a passphrase (at least 8 characters). Your passphrase encrypts your Anthropic API key and friends list on disk in this Chrome profile.
 
 - **No recovery:** Job Notifier has no server and cannot recover a forgotten passphrase. If you forget it, use **Forgot passphrase?** in settings to erase your saved key and friends list and start fresh.
-- **Session unlock:** Once you unlock settings, your saved data stays unlocked for the current Chrome session until you click **Lock now** (in settings or the popup) or close Chrome.
+- **Session unlock:** Once you unlock settings, your saved data stays unlocked for the current Chrome session until you click **Lock now** (in settings or the popup) or quit Chrome completely.
 
 ### 2. Get an Anthropic API key
 
@@ -85,7 +85,7 @@ Auto-detect is **off** until you turn it on. When it's on, Job Notifier notices 
 
 ## Privacy
 
-- Your API key and friends list are encrypted with your passphrase and stored in this browser (`chrome.storage.local`). Your passphrase is never saved. Once unlocked, a session key lives in `chrome.storage.session` until you click **Lock now** or close Chrome. With auto-detect on, postings you view (text, title, and the site's hostname) are kept in memory until you close that tab or Chrome.
+- Your API key and friends list are encrypted with your passphrase and stored in this browser (`chrome.storage.local`). Your passphrase is never saved. Once unlocked, a session key lives in `chrome.storage.session` until you click **Lock now** or quit Chrome completely. With auto-detect on, postings you view (text, title, and the site's hostname) are kept in memory until you close that tab or quit Chrome completely.
 - Data leaves your browser only when you click **Find friends**, and only to Anthropic: the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level. Friends' email addresses, your passphrase, and recruiter links are never sent.
 - There are no analytics and no developer server.
 
@@ -97,14 +97,14 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 |---|---|
 | `activeTab` | Reads the posting on the tab where you clicked the toolbar button, and only that tab. |
 | `scripting` | Runs the page-reading script on that tab, and registers the auto-detect script when you turn auto-detect on. |
-| `storage` | Saves your encrypted key and friends plus settings in this browser, and the session unlock key and postings you view in memory until you lock or close Chrome. |
+| `storage` | Saves your encrypted key and friends plus settings in this browser, and the session unlock key and postings you view in memory until you lock or quit Chrome completely. |
 | `clipboardWrite` | Lets **Copy** and **Copy all** put drafts on your clipboard. |
 | `https://api.anthropic.com/*` | Sends the analysis request to Anthropic's API with your key. It's the only server Job Notifier contacts. |
 | `https://*/*` and `http://*/*` (optional) | Requested only when you turn on auto-detect, to spot postings and confirmations on job sites. Removed when you turn it off. |
 
 ## Troubleshooting
 
-**The popup or overlay says Job Notifier is locked.** Click **Open settings to unlock** and enter your passphrase. Once unlocked, your data stays unlocked until you click **Lock now** or close Chrome.
+**The popup or overlay says Job Notifier is locked.** Click **Open settings to unlock** and enter your passphrase. Once unlocked, your data stays unlocked until you click **Lock now** or quit Chrome completely.
 
 **I forgot my passphrase.** Job Notifier cannot recover a forgotten passphrase. In settings, click **Forgot passphrase?** to permanently erase your saved API key and friends list and create a new passphrase.
 
@@ -141,7 +141,7 @@ The full policy is in [PRIVACY.md](PRIVACY.md).
 - **Saved API key and friends list:** in settings, click **Forgot passphrase?** -> **Erase saved data**.
 - **Only your API key:** unlock settings, clear the key field, and click **Save**. Revoke the key in the Claude Console too if you no longer need it.
 - **Friends:** unlock settings and click **Remove** on each one.
-- **Recent postings:** close the tab, or close Chrome.
+- **Recent postings:** close the tab, or quit Chrome completely.
 
 ## Development
 

@@ -92,11 +92,21 @@ function loadWorker({ fetch = async () => { throw new Error('no network in tests
   ctx.importScripts('background.js');
 
   // chrome.runtime.sendMessage as seen by the worker: resolves with its reply, or undefined if unhandled.
-  const send = (msg, sender) => new Promise(resolve => {
+  const sendMessage = (msg, sender) => new Promise(resolve => {
     let replied = false;
     const kept = chrome.runtime.onMessage.fire(msg, sender, reply => { replied = true; resolve(reply); });
     if (!kept.includes(true) && !replied) resolve(undefined);
   });
+  // Security Low 2: the settings page's vault messages travel on a one-request 'vault' port (see vault.test.js).
+  const sendOnVaultPort = (msg, sender) => new Promise(resolve => {
+    let done = false;
+    const finish = value => { if (!done) { done = true; resolve(value); } };
+    const port = { name: 'vault', sender, onMessage: event(), onDisconnect: event(), postMessage: finish, disconnect: () => finish(undefined) };
+    chrome.runtime.onConnect.fire(port);
+    if (!done) port.onMessage.fire(msg);
+    setTimeout(() => finish('no reply within 5 s'), 5000).unref();
+  });
+  const send = (msg, sender) => (/^VAULT_(?!LOCK$)/.test(msg?.type || '') ? sendOnVaultPort : sendMessage)(msg, sender);
   return { chrome, session, send };
 }
 

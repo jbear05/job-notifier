@@ -49,7 +49,7 @@ BRING YOUR OWN ANTHROPIC API KEY
 Job Notifier calls Claude with your own Anthropic API key. Each click on Find friends is one request, billed to your Anthropic account at Anthropic's API prices. Job Notifier itself is free, with no account to create and no server of its own. The default model is the lower-cost Claude Haiku 5.5; Claude Sonnet 5.5 and Claude Opus 5.5 are also offered. You can set a spend limit in the Claude Console.
 
 PRIVACY
-- Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or close Chrome.
+- Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or quit Chrome completely.
 - When you click Find friends, the posting text (up to 8,000 characters) and each included friend's name, skills, interests, and level go to Anthropic's API. Friends' email addresses, your passphrase, and recruiter links are never sent.
 - No analytics, no tracking, no developer server.
 
@@ -101,7 +101,7 @@ Used with activeTab to run the function that reads the visible text of the tab t
 
 **storage**
 ```text
-Saves the user's passphrase-encrypted Anthropic API key and friends list plus non-sensitive preferences in chrome.storage.local on their device, and keeps the session unlock key (while unlocked) and job postings the user views (with auto-detect on) in chrome.storage.session, which is memory only until the user clicks Lock now or closes Chrome. Nothing is synced or sent to a developer server.
+Saves the user's passphrase-encrypted Anthropic API key and friends list plus non-sensitive preferences in chrome.storage.local on their device, and keeps the session unlock key (while unlocked) and job postings the user views (with auto-detect on) in chrome.storage.session, which is memory only until the user clicks Lock now or quits Chrome completely. Nothing is synced or sent to a developer server.
 ```
 
 **clipboardWrite**
@@ -132,10 +132,10 @@ Collected (stored or processed by the extension, including locally, as the user 
 | Personally identifiable information | Yes | Friends' names and email addresses that the user enters. Stored locally. Names are sent to Anthropic to score matches; email addresses only address the mailto draft and are never sent. |
 | Health information | No | |
 | Financial and payment information | No | |
-| Authentication information | Yes | The user's Anthropic API key. Stored locally and sent only to Anthropic to authorize each request. |
+| Authentication information | Yes | The user's Anthropic API key, stored locally, encrypted with the user's passphrase, and sent only to Anthropic to authorize each request. The passphrase is processed locally in the browser, never stored, and never sent. |
 | Personal communications | No | It doesn't read the user's email or messages. Drafts it writes are opened in the user's own email app and not kept after the browser closes. |
 | Location | No | |
-| Web history | Yes | With auto-detect on, the site's hostname (not the full address), page title, and time of viewed job postings, kept in session memory until the user closes that tab or Chrome. Never sent anywhere. |
+| Web history | Yes | With auto-detect on, the site's hostname (not the full address), page title, and time of viewed job postings, kept in session memory until the user closes that tab or quits Chrome completely. Never sent anywhere. |
 | User activity | No | No click, scroll, or keystroke monitoring. |
 | Website content | Yes | Visible text of a job posting. Sent to Anthropic, up to 8,000 characters, only when the user clicks Find friends. |
 

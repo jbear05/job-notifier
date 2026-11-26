@@ -6,55 +6,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+const { makeDocument } = require('./fake-dom');
+
 const ROOT = path.join(__dirname, '..');
 const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); };
-
-class El {
-  constructor(tag, doc) {
-    Object.assign(this, { tagName: tag.toUpperCase(), doc, children: [], attrs: {}, listeners: {}, style: {}, hidden: false, ownText: '', value: '' });
-    this.classList = { toggle() {}, add() {}, remove() {}, contains: () => false };
-  }
-  setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'hidden') this.hidden = true; }
-  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
-  removeAttribute(k) { delete this.attrs[k]; }
-  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
-  append(...nodes) { for (const n of nodes) this.children.push(typeof n === 'string' ? Object.assign(new El('#text', this.doc), { ownText: n }) : n); }
-  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
-  get textContent() { return this.ownText + this.children.map(c => c.textContent).join(''); }
-  set textContent(v) { this.ownText = String(v); this.children = []; }
-  focus() { this.doc.activeElement = this; }
-  select() {}
-  remove() {}
-  contains() { return true; }
-  getClientRects() { return [{}]; }
-  querySelectorAll() { return []; }
-  // Dispatches a DOM-like event; returns whether a listener called preventDefault().
-  fire(type, props = {}) {
-    let prevented = false;
-    const ev = { type, button: 0, target: this, preventDefault() { prevented = true; }, ...props };
-    for (const fn of this.listeners[type] || []) fn(ev);
-    return prevented;
-  }
-  click() { this.fire('click'); }
-  find(pred) { return pred(this) ? this : this.children.reduce((hit, c) => hit || c.find(pred), null); }
-}
 
 const POSTING = { title: 'Data Engineering Intern | Kestrel Grid', meta: 'Viewed on kestrel-grid.example just now' };
 const PROMPT = { state: 'prompt', posting: POSTING, vaultState: 'unlocked', hasKey: true };
 
 // Loads the overlay for a tab; `state` is the worker's OVERLAY_STATE reply (an unlocked prompt with a key by default).
 async function openOverlay(state = PROMPT) {
-  const ids = new Map();
-  const docListeners = {};
-  const document = {
-    activeElement: null,
-    visibilityState: 'visible',
-    createElement: tag => new El(tag, document),
-    getElementById: id => { if (!ids.has(id)) ids.set(id, new El('div', document)); return ids.get(id); },
-    addEventListener: (type, fn) => { (docListeners[type] ||= []).push(fn); },
-    execCommand: () => false,
-  };
-  document.body = new El('body', document);
+  const { document, fireDocument } = makeDocument();
   const sent = [];
   const ports = [];
   let stateReply = state;
@@ -96,7 +58,7 @@ async function openOverlay(state = PROMPT) {
     closes: () => sent.filter(t => t === 'OVERLAY_CLOSE').length,
     // The worker's reply to the next OVERLAY_STATE, e.g. after the user unlocks in settings.
     setState: reply => { stateReply = reply; },
-    fireDocument: (type, props = {}) => { for (const fn of docListeners[type] || []) fn({ type, preventDefault() {}, ...props }); },
+    fireDocument,
     // Find friends, then the worker's reply on the analyze port.
     async findFriends(reply) {
       o.button('Find friends').click();

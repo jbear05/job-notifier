@@ -211,8 +211,23 @@ function validatePassphrasePair(passId, confirmId) {
   return pass;
 }
 
+// Vault messages carry the passphrase, key, or friends, and runtime.sendMessage would also
+// reach the popup and overlays, so each goes on its own worker-only 'vault' port (security
+// Low 2). A disconnect before the reply counts as no reply. VAULT_LOCK carries nothing.
 async function sendWorker(msg) {
-  return chrome.runtime.sendMessage(msg);
+  if (msg.type === 'VAULT_LOCK') return chrome.runtime.sendMessage(msg);
+  return new Promise(resolve => {
+    const port = chrome.runtime.connect({ name: 'vault' });
+    port.onMessage.addListener(reply => {
+      resolve(reply);
+      port.disconnect();
+    });
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      resolve(undefined);
+    });
+    port.postMessage(msg);
+  });
 }
 
 async function loadUnlockedData() {
