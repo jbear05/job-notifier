@@ -133,7 +133,7 @@ Collected (stored or processed by the extension, including locally, as the user 
 | Health information | No | |
 | Financial and payment information | No | |
 | Authentication information | Yes | The user's Anthropic API key, stored locally, encrypted with the user's passphrase, and sent only to Anthropic to authorize each request. The passphrase is processed locally in the browser, never stored, and never sent. |
-| Personal communications | No | It doesn't read the user's email or messages. Drafts it writes are opened in the user's own email app and not kept after the browser closes. |
+| Personal communications | No | It doesn't read the user's email or messages. Drafts aren't stored. They exist only while the popup or results panel is open, and Open email hands them to the user's own email app. |
 | Location | No | |
 | Web history | Yes | With auto-detect on, the site's hostname (not the full address), page title, and time of viewed job postings, kept in session memory until the user closes that tab or quits Chrome completely. Never sent anywhere. |
 | User activity | No | No click, scroll, or keystroke monitoring. |
