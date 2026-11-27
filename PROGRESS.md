@@ -26,14 +26,13 @@ Specs: [docs/specs/public-release.md](docs/specs/public-release.md) and [docs/sp
   - **0 not met.**
 - Retro: the interim entry plus a final addendum are in `~/Documents/team-notes/retros.md`.
 
+- 2026-11-27: designer confirmed `8384ea1`'s copy fixes and the spec Design copy now matches the shipped UI (`40d5bfb`); `precheck.js` 12.2 updated (`a0ca4ee`).
+- 2026-11-27: store screenshot 2 recaptured by the user in the clean test profile on the store demo page (`kestrel-grid.localhost:8080/`), whole window, no taskbar or personal UI; scaled without distortion to 1280x800 RGB with the page's own white extending the bottom (no scrollbar, white bottom rows, edge columns checked). designer: PASS (candidate A, "Job posting found"). Criterion 21 and P-10 are now met: **48 of 48 criteria met.**
+
 ## Next
-1. **Screenshot-2 decision (the user).** The current `docs/assets/screenshot-2-popup.png` is a whole-window capture with no recorded designer review.
-   - **Recapture:** follow walkthrough 13.1–13.3. The designer reviews the shot, then the lead commits it, runs `npm test`, and rebuilds the zip.
-   - **Drop it from the listing:** the user approves changing criterion 21's "(overlay results, popup, settings)" list. The lead updates the Screenshot 2 row and the "Before you submit" item in `docs/store-listing.md`. Keep the file in the repo, since `test/release.test.js` lists it, unless the user approves a test change.
-2. **Designer re-check of `8384ea1`'s three copy fixes** (P-10). Also review screenshot 2 if it ships.
-3. **Merge PR #4, then PR #5.** PRIVACY.md and the settings page link to `https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md`, which only resolves after PR #5 merges, so merge before submitting.
-4. **Store submission (the user),** using the "Before you submit" checklist in `docs/store-listing.md`.
-- Non-blocking (qa): `docs/walkthrough-auto/precheck.js:1277` still expects the reset-panel copy from before `8384ea1`, so a re-run would fail 12.2 on that string.
+1. **Merge PR #4, then PR #5 (the user).** PRIVACY.md and the settings page link to `https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md`, which only resolves after PR #5 merges, so merge before submitting.
+2. **Build the store zip from `main`** after the merge: `npm run package --script-shell=bash`.
+3. **Store submission (the user),** using the "Before you submit" checklist in `docs/store-listing.md` (developer account, data-use checkboxes, Productivity subcategory).
 
 ## Blocked
-- Nothing beyond the user's decisions: the screenshot-2 choice, then the store submission.
+- Nothing. The remaining steps are the user's: merge, then submit.
