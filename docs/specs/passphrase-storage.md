@@ -131,7 +131,7 @@ Shown only when validated pre-encryption 2.0.0 data (`settings.apiKey` and/or `f
     - Bullet list:
       - `Your saved Anthropic API key`
       - `Your entire saved friends list`
-    - Note (`.small.muted`): `Your model and match settings, Auto-detect preference, and any exported JSON files on your computer are not deleted.`
+    - Note (`.small.muted`): `Your model, effort, match threshold, and auto-detect settings, and any exported JSON files on your computer, aren't deleted.`
     - Confirmation checkbox (`.check`): `<input id="reset-confirm-check" type="checkbox" aria-describedby="reset-confirm-error" /> Yes, permanently erase my saved API key and friends list`
     - Error (`#reset-confirm-error`, `.small.error-text`, `role="alert"`): if `Erase saved data` is clicked unchecked, show `Check the box to confirm you want to erase your saved data.` and focus `#reset-confirm-check`.
     - Actions: Secondary button `Erase saved data` (`#reset-confirm-btn`), text button `Cancel` (`#reset-cancel-btn`).
@@ -179,8 +179,8 @@ Applies during passphrase creation, P3 conversion, unlock, lock, or reset. Only 
   - Keep `Export JSON` (`#export-btn`, available only while unlocked and list is non-empty).
   - Update `#export-note` (`.small.muted`) to: `Exports a readable, unencrypted JSON file of your friends list (including email addresses, excluding your API key). Anyone with this file can read it outside Chrome.`
 - **`#privacy` section update:**
-  - Paragraph 1: `Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or quit Chrome completely. Your model, match, and auto-detect preferences aren't encrypted. Job postings you view are kept in memory until you close their tab or quit Chrome completely.`
-  - Paragraph 3: `To delete everything Job Notifier stored, use Forgot passphrase? to erase saved data or remove it from Chrome's Extensions page. To remove only your key, unlock settings, clear the key field, and save.`
+  - Paragraph 1: `Your API key and friends list are encrypted with your passphrase in this browser and stay unlocked until you click Lock now or quit Chrome completely. Your model, effort, match threshold, and auto-detect settings aren't encrypted. Job postings you view are kept in memory until you close their tab or quit Chrome completely.`
+  - Paragraph 3: `To delete everything Job Notifier stored, remove it from Chrome's Extensions page. Erasing saved data with Forgot passphrase? deletes only your API key and friends list. To remove only your key, unlock settings, clear the key field, and save.`
 
 ### Popup (`popup.html`, `popup.css`, `popup.js`)
 
@@ -239,7 +239,7 @@ On `load()`, `OVERLAY_STATE` returns `{ state: 'none' }` or `{ state: 'prompt', 
     - Body: `Your saved API key and friends list were locked, so any results were cleared. Open settings to unlock.`
     - Actions: Primary `Open settings to unlock` (`openSettings()`), Secondary `Close` (`OVERLAY_CLOSE`).
     - Focus moves to `#state-heading`.
-    - Scrim click closes this state (`state !== 'results'`), `Escape` closes, Tab wraps between `Close`, `Open settings to unlock`, and `Close`.
+    - A scrim click does nothing (Design: "Scrim clicks" in public-release.md); `Escape` and both Close buttons close. Tab wraps between `Close`, `Open settings to unlock`, and `Close`.
 - **Return from settings (`visibilitychange` when `recheck` is true):**
   - When the user unlocks (or completes setup) in settings and returns to the confirmation tab, `overlay.js` re-runs `load()` (`OVERLAY_STATE`).
   - If the tab's prompt state is still valid (`state === 'prompt'`, `vaultState === 'unlocked'`, `hasKey === true`), the overlay updates to the unlocked confirmation prompt (`Find friends for this job?` with **Find friends** primary button), focuses `#state-heading`, and waits for the user's click (unlocking never triggers `ANALYZE_TAB` automatically).

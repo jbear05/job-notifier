@@ -335,7 +335,7 @@ a. Disclosure box (criteria 15, 34). It sits above the key field in both visual 
    - Nothing goes to the developer or to any analytics service. Link: "Privacy policy".
 
 b. API key. Label "Anthropic API key". A password field with no show toggle (criterion 34).
-   - Help: "Create a key in the Anthropic Console. It starts with sk-ant-." "Anthropic Console" links to the API keys page.
+   - Help: "Create a key in the Anthropic Console. It starts with sk-ant-. Job Notifier only asks for your key on this settings page, never on a website." "Anthropic Console" links to the API keys page. (The last sentence was added for security Low 3.)
    - Error: That doesn't look like an Anthropic API key. Keys start with "sk-ant-".
 
 c. Model. Label "Model". A `<select>` of the verified IDs from task 10, each shown by display name, with the default labeled "{name} (default, lower cost)".
