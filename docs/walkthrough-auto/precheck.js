@@ -1274,7 +1274,7 @@ async function runA() {
     await S.until("_vis(_id('reset-panel'))");
     eq('12.2', 'panel focus and heading', await S.v("[document.activeElement.id, _t(_id('reset-heading'))]"), ['reset-heading', 'Forgot your passphrase?']);
     eq('12.2', 'lists', await S.v("_qa('#reset-panel li').map(_t)"), ['Your saved Anthropic API key', 'Your entire saved friends list']);
-    eq('12.2', 'not deleted', await S.text('#reset-panel .small.muted'), 'Your model and match settings, Auto-detect preference, and any exported JSON files on your computer are not deleted.');
+    eq('12.2', 'not deleted', await S.text('#reset-panel .small.muted'), "Your model, effort, match threshold, and auto-detect settings, and any exported JSON files on your computer, aren't deleted.");
     await S.click('#reset-cancel-btn');
     eq('12.2', 'Cancel: focus, vault unchanged', [await S.v('document.activeElement.id'), await A.swv(`JSON.stringify((await chrome.storage.local.get('vault')).vault) === ${J(vault)}`)], ['forgot-btn', true]);
     await S.click('#forgot-btn');

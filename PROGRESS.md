@@ -11,16 +11,29 @@ Specs: [docs/specs/public-release.md](docs/specs/public-release.md) and [docs/sp
 - CI on PR #5 caught a CRLF/LF mismatch in the bundled IBM Plex license (criterion 38). Fixed in `fa35c09` (font files stored without line-ending conversion).
 - The first browser pre-check found prompt loss on same-document navigation, overlay dismissal on double-click, and a Clipboard API permissions-policy mismatch. Fixed at `0097ab7`; both browsers passed the affected steps in the latest pre-check.
 - Vault follow-up checkpoints `786a243` (direct worker transport & stale-click epoch guard) and `4f4b728` (editable drafts & `copyText` fallback wrapped in `<form autocomplete="off">` out of browser session restore) passed code, security, and design reviews.
-- Verified at `4f4b728`: `npm test` **158/158** passed and `npm run check --script-shell=bash` passed. Release ZIP rebuilt at `4f4b728` (SHA-256 `2054d95aaa439207900e7a81dcb1ef386b07f8c94faafec42f77f8ce3440f861`).
-- Headless pre-check rerun on the `4f4b728` ZIP with fresh profiles: Chrome 158 and Edge 158 both passed **71 PASS, 0 FAIL, 3 NOT AUTOMATED** (`40/40` automated blockers PASS, `6/6` extra checks `X1`–`X6` PASS including `X5` zero errors and `X6` direct worker routing, `5/5` Chrome / `6/6` Edge automated vault checks `V1`–`V8` PASS). `V7` scanned all LevelDB files (22 Chrome, 31 Edge) and all other profile/session-restore files with zero plaintext secrets or drafts (`[]`). Raw evidence is in `dist/precheck-4f4b728-chrome-r2/` and `dist/precheck-4f4b728-edge/` (`docs/walkthrough-auto/RESULTS.md` updated).
-- PR #5 is open against `main` (local `feat/public-release` is ahead of `origin/feat/public-release`; push and verify remote CI on the latest head). PR #4 had green CI in the previous check. The [formal PM audit](docs/specs/public-release.md#handoff-log) recorded 20 of 48 criteria met and 28 pending.
-- The previous interim retro is in `~/Documents/team-notes/retros.md`.
+- Headless pre-check rerun on the `4f4b728` ZIP with fresh profiles:
+  - Chrome 158 and Edge 158 each got **71 PASS, 0 FAIL, 3 NOT AUTOMATED**.
+  - All 40 automated blockers passed, and so did the 6 extra checks `X1`–`X6`, including `X5` (zero errors) and `X6` (direct worker routing).
+  - Security's automated vault checks passed: `V1` and `V5`–`V8` in Chrome, and `V1`, `V3` and `V5`–`V8` in Edge.
+  - `V7` scanned every LevelDB file (22 in Chrome, 31 in Edge) and every other profile and session-restore file, and found zero plaintext secrets or drafts.
+  - Results are in `docs/walkthrough-auto/RESULTS.md`. The raw `dist/precheck-4f4b728-*` folders are no longer on disk.
+- `8384ea1` applied the designer's three copy-accuracy fixes (options.html and `docs/store-listing.md`, copy only). At HEAD `b7c2823`, `npm test` passes **158/158** and `npm run check --script-shell=bash` passes. CI is green on PR #5 and PR #4.
+- Release ZIP rebuilt at `8384ea1`: 27 entries, no key-shaped strings, SHA-256 `08034029587a173e723cfa6dd8380e9a3d13009a04b709548598287e7a9d952d`. It replaces every earlier hash.
+- **Real-Chrome walkthrough passed (2026-11-27).** The user ran the shortened manual list in a clean, windowed Chrome profile, and every step passed. The evidence is the user's pass summary plus a screenshot of Chrome's 5.1 permission dialog. The headless pre-check covers the rest. Step 13 (screenshot 2) wasn't run.
+- **[PM final sign-off](docs/specs/public-release.md#handoff-log) (2026-11-27):**
+  - **46 of 48 met.**
+  - **2 pending:** criterion 21 and P-10, both waiting on the screenshot-2 decision. P-10 also needs a designer re-check of `8384ea1`.
+  - **0 not met.**
+- Retro: the interim entry plus a final addendum are in `~/Documents/team-notes/retros.md`.
 
 ## Next
-1. Push `feat/public-release` to `origin` and verify PR #5 remote CI passes on the updated head.
-2. The user runs the shortened [windowed Chrome checks](docs/release-walkthrough.md) on the release ZIP (`2054d95aaa...`): native permission dialog (5.1–5.5), popup auto-detect off on release build (7.4), DevTools Offline (8.4), Notepad paste (10.1), mail app launch (10.5), password-manager bubbles (V2), windows-closed + Quit behavior (4.8 / V4), toolbar icon & overall look (11.5), and whole-window `docs/assets/screenshot-2-popup.png` (13.1–13.3).
-3. The lead verifies and commits `docs/assets/screenshot-2-popup.png`, rebuilds/verifies the release ZIP and checks (`npm test`, `npm run check`, PR #5 CI), and PM closes out all acceptance criteria and writes the final retro to `~/Documents/team-notes/retros.md`.
-4. Merge PR #4, then PR #5. The user submits to the Chrome Web Store using the checklist in `docs/store-listing.md`.
+1. **Screenshot-2 decision (the user).** The current `docs/assets/screenshot-2-popup.png` is a whole-window capture with no recorded designer review.
+   - **Recapture:** follow walkthrough 13.1–13.3. The designer reviews the shot, then the lead commits it, runs `npm test`, and rebuilds the zip.
+   - **Drop it from the listing:** the user approves changing criterion 21's "(overlay results, popup, settings)" list. The lead updates the Screenshot 2 row and the "Before you submit" item in `docs/store-listing.md`. Keep the file in the repo, since `test/release.test.js` lists it, unless the user approves a test change.
+2. **Designer re-check of `8384ea1`'s three copy fixes** (P-10). Also review screenshot 2 if it ships.
+3. **Merge PR #4, then PR #5.** PRIVACY.md and the settings page link to `https://github.com/jbear05/job-notifier/blob/main/PRIVACY.md`, which only resolves after PR #5 merges, so merge before submitting.
+4. **Store submission (the user),** using the "Before you submit" checklist in `docs/store-listing.md`.
+- Non-blocking (qa): `docs/walkthrough-auto/precheck.js:1277` still expects the reset-panel copy from before `8384ea1`, so a re-run would fail 12.2 on that string.
 
 ## Blocked
-- Final sign-off awaits the user's shortened windowed Chrome walkthrough & popup capture and remote CI verification on the pushed PR #5 head. Merge and store submission follow sign-off.
+- Nothing beyond the user's decisions: the screenshot-2 choice, then the store submission.

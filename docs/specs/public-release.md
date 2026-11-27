@@ -982,3 +982,93 @@ All three .woff2 files start with the `wOF2` signature. Both license texts are S
 - **Next owner:** qa, for the realm question. Then the reviewer, designer (screenshots) and security.
 
 **QA, realm question (2026-11-26):** The engineer is right that it's a test-harness bug: on Node 22.18, `deepStrictEqual` rejects a vm-realm object against an identical literal ("same structure but are not reference-equal"). I fixed it only in tests: the five affected assertions now pass the actual value through `structuredClone` (`mainRealm()` in `test/background.test.js`, inline in `test/content.test.js:86`). Unlike `copy()`'s JSON round trip, this keeps keys whose value is `undefined`, so nothing asserted is looser. `npm test` is 146 of 146 against the working tree. A scratch copy of HEAD's `background.js`, `content.js`, `overlay.js`, `ui.js` and `lib/core.js` with these tests still fails the same 17 tests, and the three affected ones fail on behavior: no ping (`undefined`), no `CLOSE_OVERLAY` (`[]`), and no ping answer (`[]`). Next owner: reviewer, designer (screenshots), security, then qa reruns the pre-check items the engineer listed.
+
+**PM final sign-off (2026-11-27):**
+- **Basis:** HEAD `b7c2823`, clean tree. Runtime files are unchanged since `4f4b728`. `8384ea1` changed copy only, in options.html and docs/store-listing.md. The lead reports `npm test` 158/158, `npm run check --script-shell=bash` passing, and CI green on PR #5 and PR #4. The release zip, rebuilt at `8384ea1`, has 27 entries and no key-shaped strings. Its SHA-256 is `08034029587a173e723cfa6dd8380e9a3d13009a04b709548598287e7a9d952d`, which replaces `2054d…` and every earlier hash.
+- **Automated evidence:** qa's fresh-profile pre-check on the `4f4b728` zip, recorded in `docs/walkthrough-auto/RESULTS.md`. Headless Chrome 158 and Edge 158 each got 71 PASS, 0 FAIL, and 3 not automated (13.1–13.3). All 40 automated blockers and X1–X6 passed. Security's vault rows V1 and V5–V8 passed in Chrome, and V1, V3 and V5–V8 passed in Edge. Step numbers below refer to that run. The raw run folders (`dist/precheck-4f4b728-*`) and the earlier `dist/review-*` captures are no longer on disk; `dist/` holds only the zip. RESULTS.md and the review verdicts in these logs are the surviving record.
+- **Manual evidence:** on 2026-11-27 the user ran the lead's 28-step guide in a clean, windowed Chrome profile. The guide covered the walkthrough's remaining manual list:
+  - setup and load unpacked
+  - 2.2, plus 3.3 and 3.6 with V2: no password-manager bubble, and `chrome://password-manager` empty
+  - 4.8: Exit, relaunch locked with the session empty, then unlock
+  - V4
+  - 5.1–5.6
+  - 7.4: turning auto-detect off in the popup removes the overlay at once, with focus on "Download receipt"
+  - 8.4: double-clicks in the popup and the overlay send one request each, plus DevTools Offline and Try again
+  - 10.1 (Notepad) and 10.5 (a mail-app draft opens)
+  - 11.5: fonts, the teal icon, and the look
+
+  The user reported "All passed". The manual evidence is that summary plus one screenshot: Chrome's real 5.1 dialog ("Job Notifier" has requested additional permissions. It could: Read and change all your data on all websites. [Allow] [Deny]), with the teal J icon in the toolbar. The user sent no per-step console output and no other screenshots, so those "Report back" items rest on the automated evidence. 13.1–13.3 weren't run.
+- **V4:** after the user closed the last window with X and reopened Chrome, the popup said Locked, so this Chrome quits fully when its last window closes. That matches the "quit Chrome completely" copy. The keep-running branch (all windows closed, Chrome still running, data still unlocked) wasn't exercised. It's the disclosed behavior that copy covers, not a criterion.
+- **Basis change from the pre-sign-off audit:** that audit treated headless results as an early signal until the user decided whether they could replace a Chrome step. The pre-check has since run in branded Chrome 158. The user then ran the shortened manual list, which says the pre-check covers every other step. PM counts that as the user's answer. If the user didn't mean that, every Met row below that cites only pre-check steps goes back to pending.
+- **Designer copy-accuracy FAIL (after `4f4b728`), first recorded here:**
+  - The three findings:
+    - the preference lists: options.html:121 and :311 now name model, effort, match threshold, and auto-detect settings
+    - the "delete everything" line: options.html:316 now says only removing the extension deletes everything, and Forgot passphrase? erases only the key and friends list
+    - the store listing's drafts answer: docs/store-listing.md:136
+  - The fixes were lost across a session boundary until the lead re-applied them in `8384ea1`.
+  - No designer re-check of `8384ea1` is in the evidence PM was given.
+- **Stale after `8384ea1` (not blocking):**
+  - `docs/walkthrough-auto/precheck.js:1277` still expects the old reset-panel text, so a re-run would fail 12.2 on that string alone (qa).
+  - The passphrase-storage Design section, lines 134 and 182–183, still shows the old copy. The shipped copy supersedes it.
+  - PRIVACY.md:64 says erasing keeps "model, match, and auto-detect preferences" and doesn't name effort. That isn't false; aligning it is optional.
+- **Process note, not a criterion result:** during the run the user kept a notes file holding a live API key in the repo folder. `test/release.test.js` flagged it, and it was never committed. The user disabled the key and moved the file out, and the tree is clean again. `npm run package` uses `git archive HEAD`, so an untracked file can't reach the zip. Criterion 1 holds for the current tree and history.
+- **Result:**
+  - Criteria 1–38: 37 met, 1 pending, 0 not met.
+  - P-01–P-10: 9 met, 1 pending, 0 not met.
+  - Total: **46 met, 2 pending (21 and P-10, both waiting on the screenshot-2 decision), 0 not met.**
+
+| # | Status | Evidence |
+|---|---|---|
+| 1 | Met | As in the pre-sign-off audit. The notes-file key above never reached a commit, and the current tree passes the criterion 1 test. |
+| 2 | Met | Both "criterion 2" tests. Pre-check 3.4: empty list, add form open, Export hidden, popup "Add a friend first". Designer PASS on the popup-state captures (release R2/R3). |
+| 3 | Met | As before. |
+| 4 | Met | The user's screenshot of Chrome's real permission dialog. User 5.1–5.6 on the release build: Deny, Allow, off, on, and removal on the Details page. Pre-check 1.2: only `api.anthropic.com` granted at install. Pre-check 5.2: Details shows all-sites access after Allow. |
+| 5 | Met | "criterion 5" test. Pre-check 3.11 on the release zip: a tab opened before install reads as "Job posting found", with 0 requests. |
+| 6 | Met | "criterion 6" and "criterion 32a/6" tests. Pre-check 6.1: the prompt names the title and site, with 0 Claude requests before the click. Pre-check 6.2: one request after the click. Pre-check 11.4: the worker log shows only clicked POSTs. |
+| 7 | Met | As before. |
+| 8 | Met | Pre-check 6.3: `innerText`, `querySelectorAll`, `outerHTML` and `window.find` all come back false while the overlay shows a friend. Pre-check 6.4: overlay styles are unchanged under the aggressive-CSS page. |
+| 9 | Met | As before. Pre-check X2 maps every status live, and the user ran 8.4 with DevTools Offline. |
+| 10 | Met | Pre-check 10.1–10.3: "Copied" on success; on failure an alert, an unchanged label, and the draft selected, in the popup and the overlay frame. User 10.1: pasted into Notepad. |
+| 11 | Met | As before. Pre-check 1.3 and 2.3: no error styling and no "failed" wording. |
+| 12 | Met | "criterion 12" test. Pre-check 9.1–9.4: tab order, a 2px teal ring on every control, Escape, Tab wrap, and focus into the dialog and back out. User 7.4: focus lands on "Download receipt". |
+| 13 | Met | Tests as before. Pre-check 3.5–3.9, and user 3.6 (import). |
+| 14 | Met | As before. Pre-check 3.2. |
+| 15 | Met | As before. Pre-check 3.1. |
+| 16 | Met | As before. The settings page, PRIVACY.md and the listing link to `github.com/jbear05/job-notifier/blob/main/PRIVACY.md`, which resolves only after PR #5 merges, so merge before submitting. |
+| 17 | Met | As before. |
+| 18 | Met | As before, and PR #5 CI is green. |
+| 19 | Met | "criterion 19" test, and the zip at `8384ea1` has 27 entries. Pre-check 1.1: unpacked load with 0 manifest and 0 runtime errors. The user loaded the build unpacked in real Chrome. |
+| 20 | Met | As before. |
+| 21 | Pending screenshot decision | Passing: the three "criterion 21" tests, including asset sizes. The `screenshot-2-popup.png` now in the repo is a whole-window Chrome capture (toolbar, teal icon, "Job posting found", "Unlocked for this session" with Lock now). No designer review of it is recorded. Its address bar shows `/walkthrough-pages/posting.html`, a second "Job Notifier settings" tab is open, and the page shows a "Walkthrough links" section. The user is choosing between recapturing it and dropping it. **Recapture:** steps 13.1–13.3, then designer review, commit, `npm test`, and a zip rebuild. **Drop:** the criterion's "(overlay results, popup, settings)" list needs the user's approval to change, because the remaining shots are overlay, settings and prompt (the Web Store needs at least one). docs/store-listing.md's Screenshot 2 row and its "Before you submit" item change with it. `test/release.test.js` lists the file, so either keep it in the repo unlisted or have qa change that test with the user's approval. |
+| 22 | Met | Four "criterion 22" tests, and designer PASS on every surface. Pre-check 11.1–11.3: no font CDN requests. Pre-check 11.5: Fraunces SemiBold and IBM Plex Sans rendered, with no gradient, blur, radius over 4px, or emoji. User 11.5: fonts, teal icon, look. Screenshot 2 is tracked under 21. |
+| 23 | Met | 158/158 tests, the check script, and PR #5 CI green, including the manifest check. Pre-check 5.2, 6.2, 6.5, 10.1, and 10.4–10.6. User 5.2, 10.1, 10.5. |
+| 24 | Met | As before. |
+| 25 | Met | As before. |
+| 26 | Met | Tests as before. Pre-check 10.5: nothing opens before a click. Pre-check 10.6, and 10.7: the note appears and clears live. User 10.5: the mail app opened a draft. |
+| 27 | Met | As before. |
+| 28 | Met | "criterion 28" test. Pre-check 8.3: payloads show as literal text in settings, the popup, the overlay and the prompt, with 0 injected `img` elements and 0 alerts. |
+| 29 | Met | Tests as before. Pre-check 11.1–11.4: only extension files, plus clicked POSTs to `api.anthropic.com`. |
+| 30 | Met | "criterion 30" test. Pre-check 6.3 (`window.find` false) and 8.1 (the frame is inert until ready). |
+| 31 | Met | Tests as before, including the `0097ab7` document-ID tests. Pre-check 7.1–7.3: same-document URL changes keep the prompt, and a reload clears it. Pre-check 8.2: the static-ID URL is denied, and a framed dynamic URL shows nothing and sends 0 requests. Pre-check 8.1 and 11.3. `use_dynamic_url` works in Chrome 158 and Edge 158. |
+| 32 | Met | "criterion 32a/6", "32b" and "32c" tests. Pre-check 8.1: `sender.url` is `chrome-extension://<id>/overlay.html`, and the host equals the runtime ID. Pre-check X1: content-script requests get no reply or a disconnect, with 0 requests. |
+| 33 | Met | Both "criterion 33" tests. Pre-check 8.4: one request per double-click in the popup and the overlay, and per Try again. User 8.4 in real Chrome. |
+| 34 | Met | As amended by Decision 21, tests as before. Pre-check 3.10: local storage holds only `settings` and `vault`, with no plaintext key, friend or passphrase. Pre-check V1: the content script is refused `storage.session` and sees no change events. Pre-check V7: no plaintext in LevelDB or any other profile file. Pre-check V8. |
+| 35 | Met | Six "criterion 35" tests and P-07. Pre-check 3.7: a broken import is rejected and the list is unchanged. Pre-check 3.9: the export holds only friend fields. |
+| 36 | Met | Tests as before. Pre-check 1.4, 5.1–5.6 and 7.4, with the access steps on the test copy. User 5.1–5.6 and 7.4 on the release build: Deny keeps it off, Allow registers the script, off removes access, removing access on Details turns the switch off, and turning it off in the popup removes the overlay at once. |
+| 37 | Met | "criterion 37" test. Pre-check 6.5: no prompt in an unrelated window, and the opener tab gets it. |
+| 38 | Met | Tests as before (zip secret scan, and font hashes against the logged SHA-256). The `8384ea1` zip has no key-shaped strings. |
+| P-01 | Met | "P-01 / P-02" test. Pre-check 2.2, 3.3 (0 requests), 3.10, 11.4 and V7. User 2.2 and 3.3 in real Chrome. |
+| P-02 | Met | As before. Pre-check 3.10: v1, PBKDF2, SHA-256, 600000, and a fresh nonce on re-save. |
+| P-03 | Met | As before. Pre-check 8.5: the popup gets status only, and `VAULT_GET_DATA` and `VAULT_UNLOCK` go unanswered. Pre-check X1. Pre-check X6: vault messages go straight to the worker. Security and reviewer PASS on `786a243` and `4f4b728`. |
+| P-04 | Met | Tests as before, plus the Low 1 lock-race test. Pre-check 4.1–4.8, V3 (Edge relaunch stays locked), V5 (reload stays locked), and V6 (Lock right after Find friends returns LOCKED with 0 requests). User 4.8 (Exit, relaunch locked, unlock) and V4. |
+| P-05 | Met | ui-designer PASS on the settings states. Pre-check 2.1, 4.2, 9.2, 12.1 and 12.2 in Chrome 158: errors, `aria-invalid`, red borders, focus, pending text, and a 28-control tab order with rings. |
+| P-06 | Met | Tests as before. Pre-check 1.3, 4.1, 4.5, 4.6 and 8.5. Pre-check 6.6–6.8: the locked prompt, unlock alone sends 0 requests, and a lock mid-analysis shows no match cards in the overlay or the popup. |
+| P-07 | Met | Test as before. Pre-check 3.5–3.9 and 3.12, and user 3.6. |
+| P-08 | Met | As before. Pre-check 12.2–12.5. |
+| P-09 | Met | Tests as before. Security Lows 3, 5 and 6 were fixed, and designer's three copy fixes landed in `8384ea1`. PM checked the copy against pre-check 3.10 and 12.2: erasing removes only the vault, the friends and the key, and the preferences stay unencrypted. |
+| P-10 | Pending screenshot decision | Passing: 158/158 tests (permissions, data flow, zip allowlist, secret scan, manifest references) and CI green. The clean-profile load passed (pre-check 1.1, plus the user's setup). Security, code-reviewer and ui-designer passed `4f4b728`. Still needed: designer sign-off on whichever screenshot 2 ships (encryption R2 left it open), or none if it's dropped. Also a designer re-check of `8384ea1`'s copy, which isn't in the evidence. |
+
+- **Not met:** none.
+- **Next owner:** the user (the screenshot-2 decision), the designer (re-check `8384ea1`, and review screenshot 2 if it ships), then the lead (merge PR #4, then PR #5), then the user (store submission). PM marks 21 and P-10 met once their evidence lands.
+
+**Team lead, store screenshot 2 (2026-11-27):** The user captured the popup in real Chrome. The lead cropped out the Windows taskbar, scaled to 1280x764, and padded a 36px white strip. designer: FAIL. The test page's "Walkthrough links" content shows at the bottom, the strip is padding (the store wants full-bleed), the address bar shows `/walkthrough-pages/`, and an extra "Job Notifier settings" tab is open. No crop can fix it. Plan: the user retakes a full-screen capture with the taskbar auto-hidden, on the store demo page (`docs/assets/harness/demo-posting.html` served as `index.html` at `kestrel-grid.localhost:8080/`; the lead confirmed `JN.isJobPage` is true for it), with a single tab and Light mode preferred. The lead then scales it exactly 50% to 1280x800 RGB, with no crop or padding, for designer to re-review. The rejected crop is left uncommitted in the working tree until the retake replaces it. Also: precheck.js step 12.2 now expects `8384ea1`'s reset-panel wording.
