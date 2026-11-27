@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Job Notifier</title>
+  <link rel="stylesheet" href="ui.css" />
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+  <div id="scrim" class="scrim" hidden></div>
+  <div id="dialog" class="panel" role="dialog" aria-modal="true" aria-labelledby="state-heading" hidden>
+    <div class="panel-header">
+      <div class="eyebrow-row">
+        <p class="eyebrow"><img src="icons/icon16.png" alt="" width="16" height="16" />Job Notifier</p>
+        <button type="button" id="close-btn" class="btn-text">Close</button>
+      </div>
+      <h2 id="state-heading" tabindex="-1"></h2>
+    </div>
+    <div id="panel-body" class="panel-body"></div>
+  </div>
+
+  <script src="lib/core.js"></script>
+  <script src="ui.js"></script>
+  <script src="overlay.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# Kept out of `npm run package` (git archive). The zip holds only runtime files plus LICENSE.
+/.claude export-ignore
+/.github export-ignore
+/test export-ignore
+/docs export-ignore
+/CLAUDE.md export-ignore
+/DOCS.md export-ignore
+/README.md export-ignore
+/PRIVACY.md export-ignore
+/package.json export-ignore
+/.gitignore export-ignore
+/.gitattributes export-ignore
+/PROGRESS.md export-ignore
+/HANDOFF.md export-ignore
+
+# Bundled font files and their licenses are stored byte-for-byte as downloaded
+# (no line-ending conversion), so they match the SHA-256 values logged in the spec.
+/fonts/** -text

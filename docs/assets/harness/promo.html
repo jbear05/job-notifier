@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Promo tile</title>
+  <!-- ui.css carries the bundled @font-face rules the tile's text needs. -->
+  <link rel="stylesheet" href="../../../ui.css" />
+  <style>svg { display: block; }</style>
+</head>
+<body>
+  <script>
+    // Inline the SVG source so its text uses the page's bundled fonts (an <img> can't).
+    const x = new XMLHttpRequest();
+    x.open('GET', '../promo-440x280.svg', false);
+    x.send();
+    document.body.innerHTML = x.responseText;
+    Promise.all([document.fonts.load('600 40px Fraunces'), document.fonts.load('400 18px "IBM Plex Sans"')]).then(faces => {
+      document.documentElement.dataset.shotReady = faces.every(f => f.length) ? 'ok' : 'bundled fonts did not load';
+    });
+  </script>
+</body>
+</html>

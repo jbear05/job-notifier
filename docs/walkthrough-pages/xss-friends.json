@@ -1,0 +1,3 @@
+[
+  { "name": "<img src=x onerror=alert(1)>", "contact": "", "skills": ["<img src=x onerror=alert(1)>", "Python", "SQL", "data pipelines"], "interests": ["energy"], "level": "Internship", "notify": true }
+]
